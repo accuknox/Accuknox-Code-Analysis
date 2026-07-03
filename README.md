@@ -315,9 +315,6 @@ jobs:
           # SAST – override default severity (HIGH)
           sast_severity: "HIGH,CRITICAL"
 
-          # IaC – restrict to specific frameworks
-          iac_framework: "Kubernetes,Terraform"
-
           # SBOM (project_name required)
           sbom_scan_type: "filesystem"
           sbom_scan_path: "."

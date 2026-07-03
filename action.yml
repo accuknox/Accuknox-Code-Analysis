@@ -437,6 +437,11 @@ runs:
         SOFT_FAIL_ARG=""
         [ "$SOFT_FAIL" = "true" ] && SOFT_FAIL_ARG="--softfail"
 
+        # Trim leading/trailing whitespace and CR/LF (preserve internal spaces
+        # so names like "My Project" survive) before passing to the scanner.
+        PROJECT_NAME="${PROJECT_NAME#"${PROJECT_NAME%%[![:space:]]*}"}"
+        PROJECT_NAME="${PROJECT_NAME%"${PROJECT_NAME##*[![:space:]]}"}"
+
         if [ -z "$PROJECT_NAME" ]; then
           echo "ERROR: sbom_project_name is required for sbom."
           exit 1
