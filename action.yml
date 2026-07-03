@@ -267,6 +267,14 @@ runs:
         set -e
         echo "Starting AccuKnox SCA scan..."
 
+        # Trivy runs in a container as root and writes results.json root-owned.
+        # For a git checkout the SCA scanner then rewrites that file in-place
+        # (ArtifactType repository -> filesystem), which fails as the non-root
+        # runner user and aborts the scan. Pre-create it world-writable so the
+        # in-place rewrite succeeds (same trick as the secret/sbom steps).
+        touch ./results.json
+        chmod 666 ./results.json
+
         SOFT_FAIL="${SOFT_FAIL//[$'\t\r\n ']}"
         SOFT_FAIL_ARG=""
         [ "$SOFT_FAIL" = "true" ] && SOFT_FAIL_ARG="--softfail"
