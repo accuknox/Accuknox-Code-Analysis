@@ -449,6 +449,18 @@ runs:
 
         SEVERITY="${SEVERITY//[$'\t\r\n ']}"
 
+        # The scanner runs the SBOM generator (Trivy) inside a container as root,
+        # so the results.json it writes is root-owned. The scanner then enriches
+        # that file in-place (injecting project_name and rewriting the in-container
+        # scan root "/workdir"/image ref to the real project) BEFORE uploading.
+        # As the non-root runner user that in-place write fails with a permission
+        # error, which the scanner swallows and uploads the RAW file — so the
+        # backend sees metadata.component.name ("/workdir" or the image ref) as the
+        # project name and rejects it. Pre-create the file world-writable (same
+        # trick the secret scan uses) so the enrichment write succeeds.
+        touch ./results.json
+        chmod 666 ./results.json
+
         if [ -n "$RAW_COMMAND" ]; then
           CMD="$RAW_COMMAND"
         else
