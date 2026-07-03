@@ -283,6 +283,17 @@ runs:
         SEVERITY_ARG=""
         [ -n "$SEVERITY" ] && SEVERITY_ARG="--severity $SEVERITY"
 
+        # Work around a scanner arg-ordering bug in container mode: it inserts
+        # "--skip-dirs .git" right after the subcommand and then its path
+        # normalizer mistakes that flag for the scan target, mangling it into
+        # "/workdir/--skip-dirs" and leaving the real target as a second
+        # positional -> Trivy fails with "multiple targets cannot be specified".
+        # Supplying --skip-dirs ourselves makes the scanner skip that insertion.
+        case " $COMMAND " in
+          *" --skip-dirs "*) : ;;
+          *) COMMAND="$COMMAND --skip-dirs .git" ;;
+        esac
+
         echo "$ACCUKNOX_SCANNER scan $SOFT_FAIL_ARG sca --command \"$COMMAND\" --container-mode $SEVERITY_ARG"
         "$ACCUKNOX_SCANNER" scan $SOFT_FAIL_ARG sca --command "$COMMAND" --container-mode $SEVERITY_ARG
 
