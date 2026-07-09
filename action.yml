@@ -28,7 +28,7 @@ inputs:
   scanner_version:
     description: "Version (git tag) of the accuknox-aspm-scanner binary to download (must include the sca, ml, and api-discovery scanners)"
     required: false
-    default: "v0.14.7-rc.1"
+    default: "v0.14.7-rc.2"
   soft_fail:
     description: "Do not return a non-zero exit code if a scan finds issues (applies to all scans)"
     required: false
@@ -276,8 +276,6 @@ runs:
         chmod 666 ./results.json
 
         SOFT_FAIL="${SOFT_FAIL//[$'\t\r\n ']}"
-        SOFT_FAIL_ARG=""
-        [ "$SOFT_FAIL" = "true" ] && SOFT_FAIL_ARG="--softfail"
 
         SEVERITY="${SEVERITY//[$'\t\r\n ']}"
         SEVERITY_ARG=""
@@ -294,8 +292,70 @@ runs:
           *) COMMAND="$COMMAND --skip-dirs .git" ;;
         esac
 
-        echo "$ACCUKNOX_SCANNER scan $SOFT_FAIL_ARG sca --command \"$COMMAND\" --container-mode $SEVERITY_ARG"
-        "$ACCUKNOX_SCANNER" scan $SOFT_FAIL_ARG sca --command "$COMMAND" --container-mode $SEVERITY_ARG
+        # Generate the report but keep the upload local to us. Trivy labels the
+        # artifact by the in-container scan path ("/workdir"), but AccuKnox
+        # identifies the SCA asset by "<RepoURL>:<Branch>". We rewrite that from
+        # the git metadata Trivy captured, then upload the report ourselves.
+        # (Severity gating is applied afterwards so the upload always happens.)
+        set +e
+        "$ACCUKNOX_SCANNER" scan --keep-results --skip-upload sca --command "$COMMAND" --container-mode $SEVERITY_ARG
+        SCAN_RC=$?
+        set -e
+
+        if [ ! -f results.json ]; then
+          echo "ERROR: SCA report not generated (results.json missing)."
+          exit 1
+        fi
+
+        python3 - <<'PY'
+        import json
+        with open("results.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        md = data.get("Metadata") or {}
+        repo = (md.get("RepoURL") or "").strip()
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+        branch = (md.get("Branch") or "").strip()
+        if repo:
+            data["ArtifactName"] = f"{repo}:{branch}" if branch else repo
+            md["RepoURL"] = repo
+            data["Metadata"] = md
+        # AccuKnox SCA parsing expects a filesystem artifact.
+        if data.get("ArtifactType") == "repository":
+            data["ArtifactType"] = "filesystem"
+        # Drop the upstream scanner version banner.
+        data.pop("Trivy", None)
+        with open("results.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        print(f"SCA identity set: ArtifactName={data.get('ArtifactName')!r} ArtifactType={data.get('ArtifactType')!r}")
+        PY
+
+        # Upload the report, mirroring the scanner's own artifact upload (TR = Trivy).
+        case "$ACCUKNOX_ENDPOINT" in
+          http://*|https://*) BASE_URL="$ACCUKNOX_ENDPOINT" ;;
+          *)                  BASE_URL="https://$ACCUKNOX_ENDPOINT" ;;
+        esac
+        UPLOAD_URL="${BASE_URL}/api/v1/artifact/?data_type=TR&label_id=${ACCUKNOX_LABEL}&save_to_s3=true"
+
+        echo "Uploading SCA report to ${BASE_URL}/api/v1/artifact/ ..."
+        HTTP_CODE="$(curl -sS -k -o /tmp/ak_sca_upload_resp.txt -w '%{http_code}' \
+          -X POST "$UPLOAD_URL" \
+          -H "Authorization: Bearer ${ACCUKNOX_TOKEN}" \
+          -F "file=@results.json")"
+        echo "Upload HTTP status: $HTTP_CODE"
+        cat /tmp/ak_sca_upload_resp.txt 2>/dev/null || true
+        echo
+        case "$HTTP_CODE" in
+          2*) echo "SCA report uploaded successfully." ;;
+          *)  echo "ERROR: SCA upload failed (HTTP $HTTP_CODE)."; exit 1 ;;
+        esac
+
+        # Preserve severity-gating: soft_fail never fails the job; otherwise
+        # propagate the scanner's exit code (non-zero = matching vulnerabilities).
+        if [ "$SOFT_FAIL" = "true" ]; then
+          exit 0
+        fi
+        exit "$SCAN_RC"
 
     # ------------------------------------------------------------------
     # Secret (TruffleHog)
