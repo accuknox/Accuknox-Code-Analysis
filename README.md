@@ -333,7 +333,7 @@ jobs:
 | `accuknox_token` | API token for authenticating with AccuKnox SaaS | Required | — |
 | `accuknox_endpoint` | URL of the AccuKnox Console to push results | Required | — |
 | `accuknox_label` | Label used in AccuKnox SaaS to organise and identify results | Required | — |
-| `scanner_version` | Git tag of the `accuknox-aspm-scanner` binary to download (must include `sca`, `ml`, `api-discovery`) | Optional | `v0.14.7-rc.1` |
+| `scanner_version` | Git tag of the `accuknox-aspm-scanner` binary to download (must include `sca`, `ml`, `api-discovery`) | Optional | `v0.14.7-rc.3` |
 | `soft_fail` | Prevent CI from failing on findings (applies to all scans) | Optional | `true` |
 | `upload_artifact` | Upload kept result files (`results*.json`, `results*.jsonl`) as a GitHub artifact | Optional | `false` |
 
