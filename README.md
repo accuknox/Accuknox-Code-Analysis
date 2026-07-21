@@ -197,7 +197,7 @@ jobs:
           soft_fail: true
 ```
 
-### 5. ML Static Scan
+### 5. ML Static Scan 
 
 ```yaml
 name: AccuKnox ML Static Scan
@@ -219,7 +219,7 @@ jobs:
           soft_fail: true
 ```
 
-### 6. API Discovery
+### 6. API Discovery (Note: WIP)
 
 ```yaml
 name: AccuKnox API Discovery
@@ -294,14 +294,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
-        with:
-          fetch-depth: 0   # full history for git-based secret scanning
 
       - name: Run AccuKnox Code Analysis
         uses: accuknox/accuknox-code-analysis@latest
         with:
           # Run every scanner in a single step
-          scan_type: "sast, sca, secret, iac, ml, api-discovery, sbom"
+          scan_type: "sast, sca, secret, iac, ml, sbom"
 
           # AccuKnox credentials
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
