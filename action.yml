@@ -37,6 +37,10 @@ inputs:
     description: "Upload kept scan result files as a GitHub artifact"
     required: false
     default: "false"
+  container_mode:
+    description: "Run sast/sca/secret/iac/sbom in Docker (--container-mode) instead of the locally-installed/cached CLI tool binaries. ml-scan and api-discovery always run in container mode regardless of this flag (no local tool-install path exists for them)."
+    required: false
+    default: "false"
 
   # ------------------------------------------------------------------
   # SAST (OpenGrep)
@@ -194,6 +198,7 @@ runs:
         ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
         SCANNER_VERSION: ${{ inputs.scanner_version }}
         SOFT_FAIL: ${{ inputs.soft_fail }}
+        CONTAINER_MODE: ${{ inputs.container_mode }}
       run: |
         set -e
         if [ -z "$ACCUKNOX_ENDPOINT" ] || [ -z "$ACCUKNOX_TOKEN" ] || [ -z "$ACCUKNOX_LABEL" ]; then
@@ -224,12 +229,25 @@ runs:
           *) echo "ERROR: scan_type did not match any known scan. Provide one or more of: sast, sca, secret, iac, ml, api-discovery, sbom."; exit 1 ;;
         esac
 
-        # Normalise soft_fail once; every scan step reuses these.
+        # Normalise soft_fail/container_mode once; every scan step reuses these.
         SOFT_FAIL="${SOFT_FAIL//[$'\t\r\n ']}"
+        CONTAINER_MODE="${CONTAINER_MODE//[$'\t\r\n ']}"
         {
           echo "SOFT_FAIL=$SOFT_FAIL"
           [ "$SOFT_FAIL" = "true" ] && echo "SOFT_FAIL_ARG=--softfail" || echo "SOFT_FAIL_ARG="
+          [ "$CONTAINER_MODE" = "true" ] && echo "CONTAINER_MODE_ARG=--container-mode" || echo "CONTAINER_MODE_ARG="
         } >> "$GITHUB_ENV"
+
+        # Whether each scan's container image is needed - true only when
+        # container_mode is on AND that scan is selected. Computed once here
+        # so the cache/pull steps below don't each re-derive the same logic.
+        img_sast=false; img_container=false; img_secret=false; img_iac=false
+        if [ "$CONTAINER_MODE" = "true" ]; then
+          $run_sast && img_sast=true
+          { $run_sca || $run_sbom; } && img_container=true
+          $run_secret && img_secret=true
+          $run_iac && img_iac=true
+        fi
 
         {
           echo "run_sast=$run_sast"
@@ -239,21 +257,147 @@ runs:
           echo "run_ml=$run_ml"
           echo "run_api=$run_api"
           echo "run_sbom=$run_sbom"
+          echo "container_mode=$CONTAINER_MODE"
+          echo "img_sast=$img_sast"
+          echo "img_container=$img_container"
+          echo "img_secret=$img_secret"
+          echo "img_iac=$img_iac"
         } >> "$GITHUB_OUTPUT"
 
-        # PRE-PRODUCTION TEST ONLY: decorate-pr hasn't shipped in a real
-        # aspm-scanner-cli release yet, so this uses a binary committed
-        # straight into this action's own repo (test-bin/) instead of
-        # downloading a tagged release. Revert to the curl download below
-        # once decorate-pr is in a real release, and delete test-bin/.
-        echo "Installing AccuKnox ASPM Scanner (pre-production test build)..."
+        echo "Downloading AccuKnox ASPM Scanner ($SCANNER_VERSION)..."
         SCANNER_BIN="$RUNNER_TEMP/accuknox-aspm-scanner"
-        cp "${{ github.action_path }}/test-bin/accuknox-aspm-scanner" "$SCANNER_BIN"
-        # Real release download, disabled for now:
-        # curl -L "https://github.com/accuknox/aspm-scanner-cli/releases/download/${SCANNER_VERSION}/accuknox-aspm-scanner" -o "$SCANNER_BIN"
+        curl -L "https://github.com/accuknox/aspm-scanner-cli/releases/download/${SCANNER_VERSION}/accuknox-aspm-scanner" -o "$SCANNER_BIN"
         chmod +x "$SCANNER_BIN"
         echo "ACCUKNOX_SCANNER=$SCANNER_BIN" >> "$GITHUB_ENV"
         echo "AccuKnox ASPM scanner installed at $SCANNER_BIN"
+
+        # Only the tools the selected scans need, and only in local mode -
+        # container_mode=true runs everything in Docker, so there's nothing
+        # local to install/cache. The key changes with the scanner binary or tool set.
+        tools=""
+        if [ "$CONTAINER_MODE" != "true" ]; then
+          $run_sast && tools+=" sast"
+          { $run_sca || $run_sbom; } && tools+=" container"
+          $run_secret && tools+=" secret"
+          $run_iac && tools+=" iac"
+        fi
+        echo "tools=$tools" >> "$GITHUB_OUTPUT"
+        sha=$(sha256sum "$SCANNER_BIN" | cut -c1-12)
+        echo "scanner_sha=$sha" >> "$GITHUB_OUTPUT"
+        echo "tools_key=$sha${tools// /-}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache scanner tools
+      id: tools-cache
+      if: steps.setup.outputs.tools != ''
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/bin/accuknox
+        key: accuknox-tools-${{ runner.os }}-${{ steps.setup.outputs.tools_key }}
+        restore-keys: accuknox-tools-${{ runner.os }}-${{ steps.setup.outputs.scanner_sha }}
+
+    - name: Install scanner tools
+      if: steps.setup.outputs.tools != '' && steps.tools-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -e
+        # `tool install` exits 0 even when the download silently fails, so
+        # verify the expected binary actually landed and retry instead of
+        # trusting the exit code.
+        if [ -d /usr/share/accuknox-aspm-scanner/tools ]; then
+          TOOLS_DIR=/usr/share/accuknox-aspm-scanner/tools
+        else
+          TOOLS_DIR="$HOME/.local/bin/accuknox"
+        fi
+
+        install_tool() {
+          verify_path="$TOOLS_DIR/$2"
+          [ -e "$verify_path" ] && return 0
+          attempt=1
+          while [ "$attempt" -le 3 ]; do
+            echo "Installing scanner tool '$1' (attempt $attempt/3)..."
+            "$ACCUKNOX_SCANNER" tool install --type "$1" || true
+            [ -e "$verify_path" ] && return 0
+            echo "WARNING: '$1' not present at $verify_path after install; retrying..."
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+          echo "ERROR: failed to install scanner tool '$1' (expected $verify_path)."
+          return 1
+        }
+
+        for t in ${{ steps.setup.outputs.tools }}; do
+          verify_rel="$t"; [ "$t" = sast ] && verify_rel="sast/sast"
+          install_tool "$t" "$verify_rel"
+        done
+
+    # ML/API Discovery have no local tool-install path in this CLI, so they
+    # always run --container-mode. sast/sca/secret/iac/sbom only go through
+    # Docker when container_mode=true is explicitly requested. Either way,
+    # cache the image as a docker-save tarball instead of re-pulling it.
+    - name: Restore cached ML scan image
+      id: ml-image-cache
+      if: steps.setup.outputs.run_ml == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/accuknox-images/ml-scan.tar
+        key: accuknox-image-ml-scan-1.0.21-linux-amd64
+
+    - name: Restore cached API Discovery image
+      id: api-image-cache
+      if: steps.setup.outputs.run_api == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/accuknox-images/api-discovery.tar
+        key: accuknox-image-api-discovery-0.1.0-linux-amd64
+
+    - name: Restore cached SAST image
+      id: sast-image-cache
+      if: steps.setup.outputs.img_sast == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/accuknox-images/sast.tar
+        key: accuknox-image-sast-0.1.0-linux-amd64
+
+    - name: Restore cached container (SCA/SBOM) image
+      id: container-image-cache
+      if: steps.setup.outputs.img_container == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/accuknox-images/container.tar
+        key: accuknox-image-container-0.69.3-linux-amd64
+
+    - name: Restore cached Secret image
+      id: secret-image-cache
+      if: steps.setup.outputs.img_secret == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/accuknox-images/secret.tar
+        key: accuknox-image-secret-3.90.3-linux-amd64
+
+    - name: Restore cached IaC image
+      id: iac-image-cache
+      if: steps.setup.outputs.img_iac == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/accuknox-images/iac.tar
+        key: accuknox-image-iac-3.2.458-linux-amd64
+
+    - name: Load or pull container-mode images
+      if: steps.setup.outputs.run_ml == 'true' || steps.setup.outputs.run_api == 'true' || steps.setup.outputs.img_sast == 'true' || steps.setup.outputs.img_container == 'true' || steps.setup.outputs.img_secret == 'true' || steps.setup.outputs.img_iac == 'true'
+      shell: bash
+      run: |
+        set -e
+        load_or_pull() {
+          [ "$1" = true ] || return 0
+          [ "$2" = true ] && { docker load -i "$4"; return; }
+          docker pull ${5:+--platform "$5"} "$3" && mkdir -p "$(dirname "$4")" && docker save -o "$4" "$3"
+        }
+        load_or_pull "${{ steps.setup.outputs.run_ml }}" "${{ steps.ml-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/ondemand_modelscan:1.0.21 "${{ runner.temp }}/accuknox-images/ml-scan.tar" linux/amd64
+        load_or_pull "${{ steps.setup.outputs.run_api }}" "${{ steps.api-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/code2api:0.1.0 "${{ runner.temp }}/accuknox-images/api-discovery.tar"
+        load_or_pull "${{ steps.setup.outputs.img_sast }}" "${{ steps.sast-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/opengrepjob:0.1.0 "${{ runner.temp }}/accuknox-images/sast.tar"
+        load_or_pull "${{ steps.setup.outputs.img_container }}" "${{ steps.container-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/trivy:0.69.3 "${{ runner.temp }}/accuknox-images/container.tar"
+        load_or_pull "${{ steps.setup.outputs.img_secret }}" "${{ steps.secret-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/trufflesecurity/trufflehog:3.90.3 "${{ runner.temp }}/accuknox-images/secret.tar"
+        load_or_pull "${{ steps.setup.outputs.img_iac }}" "${{ steps.iac-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/bridgecrew/checkov:3.2.458 "${{ runner.temp }}/accuknox-images/iac.tar"
 
     # ------------------------------------------------------------------
     # SAST (OpenGrep)
@@ -281,8 +425,7 @@ runs:
           --commit-sha "${GITHUB_SHA}" \
           --pipeline-id "${GITHUB_RUN_ID}" \
           --job-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-          --container-mode \
-          $SEVERITY_ARG
+          $SEVERITY_ARG $CONTAINER_MODE_ARG
 
         # SCA also defaults to ./results.json - rename immediately so a
         # later "scan_type: sast,sca" run doesn't have SCA silently
@@ -316,8 +459,7 @@ runs:
           --command "$COMMAND" \
           --repo-url "https://github.com/${GITHUB_REPOSITORY}" \
           --repo-branch "${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" \
-          --container-mode \
-          $SEVERITY_ARG
+          $SEVERITY_ARG $CONTAINER_MODE_ARG
 
         # See the matching rename in the SAST step - same default filename.
         [ -f results.json ] && mv results.json sca-results.json || true
@@ -344,7 +486,7 @@ runs:
         FULL_CMD="$COMMAND"
         [ -n "$ADDITIONAL_ARGUMENTS" ] && FULL_CMD="$FULL_CMD $ADDITIONAL_ARGUMENTS"
 
-        "$ACCUKNOX_SCANNER" scan --keep-results $SOFT_FAIL_ARG secret --command "$FULL_CMD" --container-mode
+        "$ACCUKNOX_SCANNER" scan --keep-results $SOFT_FAIL_ARG secret --command "$FULL_CMD" $CONTAINER_MODE_ARG
 
     # ------------------------------------------------------------------
     # IaC (Checkov) - with frameworks
@@ -388,7 +530,7 @@ runs:
 
         # --keep-results: without it the file is deleted right after
         # upload, before the PR Decorator step below can read it.
-        "$ACCUKNOX_SCANNER" scan --keep-results $SOFT_FAIL_ARG iac --command "$CMD_ARGS" --container-mode --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" --repo-branch "${GITHUB_REF#refs/heads/}"
+        "$ACCUKNOX_SCANNER" scan --keep-results $SOFT_FAIL_ARG iac --command "$CMD_ARGS" --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" --repo-branch "${GITHUB_REF#refs/heads/}" $CONTAINER_MODE_ARG
 
     # ------------------------------------------------------------------
     # ML Static Scan (ModelScan)
@@ -501,7 +643,7 @@ runs:
           [ -n "$SEVERITY" ] && CMD="$CMD --severity $SEVERITY"
         fi
 
-        "$ACCUKNOX_SCANNER" scan $SOFT_FAIL_ARG --keep-results --project-name "$PROJECT_NAME" container --command "$CMD" --generate-sbom --container-mode
+        "$ACCUKNOX_SCANNER" scan $SOFT_FAIL_ARG --keep-results --project-name "$PROJECT_NAME" container --command "$CMD" --generate-sbom $CONTAINER_MODE_ARG
 
         [ -f results.json ] && cp results.json results-sbom.json || true
 
