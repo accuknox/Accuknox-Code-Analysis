@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@v7.0.0
 
       - name: Run AccuKnox Code Analysis
-        uses: accuknox/accuknox-code-analysis@latest
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           # Pick any combination of scans
           scan_type: "sast, sca, secret, iac, ml, api-discovery, sbom"
