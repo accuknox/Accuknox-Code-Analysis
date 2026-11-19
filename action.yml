@@ -1,5 +1,5 @@
 name: "AccuKnox ASPM Scan"
-description: "Unified AccuKnox ASPM scanner. Run any combination via scan_type: sast, sca, secret, iac, ml, api-discovery, sbom."
+description: "Unified AccuKnox ASPM scanner. Run any combination via scan_type: sast, sca, secret, iac, ml, sbom."
 
 branding:
   icon: "shield"
@@ -10,7 +10,7 @@ inputs:
   # Which scans to run
   # ------------------------------------------------------------------
   scan_type:
-    description: "Comma/space separated list of scans to run: sast, sca, secret, iac, ml, api-discovery, sbom"
+    description: "Comma/space separated list of scans to run, in order: sast, sca, secret, iac, ml, sbom"
     required: true
 
   # ------------------------------------------------------------------
@@ -26,11 +26,11 @@ inputs:
     description: "Label in AccuKnox SaaS for associating scan results"
     required: true
   scanner_version:
-    description: "Version (git tag) of the accuknox-aspm-scanner binary to download (must include the sca, ml, and api-discovery scanners)"
+    description: "Version (git tag) of the accuknox-aspm-scanner binary to download (v0.17.0-rc.4 or later: the action runs its pipeline command)"
     required: false
-    default: "v0.16.5"
+    default: "v0.17.0-rc.4"
   soft_fail:
-    description: "Do not return a non-zero exit code if a scan finds issues (applies to all scans)"
+    description: "Do not fail the build on findings or a failed quality-gate policy. Scans that cannot run or upload, and a gate that cannot be evaluated, still fail."
     required: false
     default: "true"
   upload_artifact:
@@ -38,7 +38,7 @@ inputs:
     required: false
     default: "false"
   quality_gate:
-    description: "Let the AccuKnox quality-gate policy pass, warn or fail the build for sast, sca, secret, iac and sbom (ml and api-discovery are not gated). Requires gate_token. When true, the *_severity inputs no longer fail the build."
+    description: "Let the AccuKnox quality-gate policy pass, warn or fail the build for sast, sca, secret, iac and sbom (ml is not gated). Requires gate_token."
     required: false
     default: "true"
   gate_token:
@@ -50,7 +50,7 @@ inputs:
     required: false
     default: "300"
   container_mode:
-    description: "Run sast/sca/secret/iac/sbom in Docker (--container-mode) instead of the locally-installed/cached CLI tool binaries. ml-scan and api-discovery always run in container mode regardless of this flag (no local tool-install path exists for them)."
+    description: "Run sast/sca/secret/iac/sbom in Docker (--container-mode) instead of the locally-installed/cached CLI tool binaries. ml always scans in its container, and only when model files are found."
     required: false
     default: "false"
 
@@ -62,7 +62,7 @@ inputs:
     required: false
     default: "."
   sast_severity:
-    description: "sast: comma-separated severities (LOW, MEDIUM, HIGH, CRITICAL)"
+    description: "Deprecated and ignored: quality-gate policies decide which findings fail the build"
     required: false
     default: "HIGH"
 
@@ -74,7 +74,7 @@ inputs:
     required: false
     default: "fs ."
   sca_severity:
-    description: "sca: comma-separated severities to fail on (UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL)"
+    description: "Deprecated and ignored: quality-gate policies decide which findings fail the build"
     required: false
     default: ""
 
@@ -126,21 +126,13 @@ inputs:
     required: false
     default: "scan -p . -r json"
   ml_model_name:
-    description: "ml: custom collector/model identifier (optional)"
+    description: "Deprecated and ignored: the model identifier is derived from the repository"
     required: false
     default: ""
   ml_source_type:
-    description: "ml: source type for metadata"
+    description: "Deprecated and ignored: always github"
     required: false
     default: "github"
-
-  # ------------------------------------------------------------------
-  # API Discovery (code2api)
-  # ------------------------------------------------------------------
-  api_command:
-    description: "api-discovery: command text passed to --command (e.g. '-path . -output results.json')"
-    required: false
-    default: "-path . -output results.json"
 
   # ------------------------------------------------------------------
   # SBOM (image and filesystem)
@@ -196,14 +188,14 @@ inputs:
 
 outputs:
   gate_status:
-    description: "Quality-gate verdict: passed, warning, failed, error, timeout, unsupported, rejected, or skipped when no gated scan uploaded results. Empty when quality_gate is false."
-    value: ${{ steps.gate.outputs.gate_status }}
+    description: "Quality-gate verdict: passed, warning, failed, error, timeout, unsupported, rejected, or skipped when the gate had nothing to evaluate. Empty when quality_gate is false."
+    value: ${{ steps.scan.outputs.gate_status }}
 
 runs:
   using: "composite"
   steps:
     # ------------------------------------------------------------------
-    # Parse scan_type + install scanner (once)
+    # Parse scan_type + install the scanner (once)
     # ------------------------------------------------------------------
     - name: Setup AccuKnox Scanner
       id: setup
@@ -214,14 +206,17 @@ runs:
         ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
         ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
         SCANNER_VERSION: ${{ inputs.scanner_version }}
-        SOFT_FAIL: ${{ inputs.soft_fail }}
         CONTAINER_MODE: ${{ inputs.container_mode }}
         QUALITY_GATE: ${{ inputs.quality_gate }}
         GATE_TOKEN: ${{ inputs.gate_token }}
+        SAST_SEVERITY: ${{ inputs.sast_severity }}
+        SCA_SEVERITY: ${{ inputs.sca_severity }}
+        ML_MODEL_NAME: ${{ inputs.ml_model_name }}
+        ML_SOURCE_TYPE: ${{ inputs.ml_source_type }}
       run: |
         set -e
         if [ -z "$ACCUKNOX_ENDPOINT" ] || [ -z "$ACCUKNOX_TOKEN" ] || [ -z "$ACCUKNOX_LABEL" ]; then
-          echo "ERROR: accuknox_endpoint, accuknox_token, and accuknox_label must be set!"
+          echo "::error::accuknox_endpoint, accuknox_token and accuknox_label must be set. Pull requests from forks and Dependabot do not receive repository secrets."
           exit 1
         fi
         QUALITY_GATE="$(echo "$QUALITY_GATE" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
@@ -230,114 +225,62 @@ runs:
           exit 1
         fi
 
-        # Parse scan_type into exact tokens (lowercase, comma/space separated)
-        run_sast=false; run_sca=false; run_secret=false; run_iac=false
-        run_ml=false; run_api=false; run_sbom=false
-        NORM=$(echo "$SCAN_TYPE" | tr 'A-Z' 'a-z' | tr ',' ' ')
-        for t in $NORM; do
+        # scan_type -> the pipeline's --scans, in the order given (comma/space separated, aliases accepted).
+        SCANS=""
+        add_scan() { case ",$SCANS," in *",$1,"*) ;; *) SCANS="${SCANS:+$SCANS,}$1" ;; esac; }
+        for t in $(echo "$SCAN_TYPE" | tr '[:upper:]' '[:lower:]' | tr ',' ' '); do
           case "$t" in
-            sast)                       run_sast=true ;;
-            sca)                        run_sca=true ;;
-            secret|secrets)             run_secret=true ;;
-            iac)                        run_iac=true ;;
-            ml|ml-scan|mlscan)          run_ml=true ;;
-            api|api-discovery)          run_api=true ;;
-            sbom)                       run_sbom=true ;;
-            "")                         ;;
-            *) echo "WARNING: unknown scan type '$t' (valid: sast, sca, secret, iac, ml, api-discovery, sbom)" ;;
+            sast)                add_scan sast ;;
+            sca)                 add_scan sca ;;
+            secret|secrets)      add_scan secret ;;
+            iac)                 add_scan iac ;;
+            ml|ml-scan|mlscan)   add_scan ml ;;
+            sbom)                add_scan sbom ;;
+            api|api-discovery)   echo "::warning::api-discovery has been removed from this action: AccuKnox cannot import its results yet. The other scans still run." ;;
+            *)                   echo "::warning::Unknown scan type '$t' (valid: sast, sca, secret, iac, ml, sbom)." ;;
           esac
         done
-
-        case "$run_sast$run_sca$run_secret$run_iac$run_ml$run_api$run_sbom" in
-          *true*) ;;
-          *) echo "ERROR: scan_type did not match any known scan. Provide one or more of: sast, sca, secret, iac, ml, api-discovery, sbom."; exit 1 ;;
-        esac
-
-        # Normalise soft_fail/container_mode once; every scan step reuses these.
-        SOFT_FAIL="${SOFT_FAIL//[$'\t\r\n ']}"
-        CONTAINER_MODE="${CONTAINER_MODE//[$'\t\r\n ']}"
-        {
-          echo "SOFT_FAIL=$SOFT_FAIL"
-          [ "$SOFT_FAIL" = "true" ] && echo "SOFT_FAIL_ARG=--softfail" || echo "SOFT_FAIL_ARG="
-          [ "$CONTAINER_MODE" = "true" ] && echo "CONTAINER_MODE_ARG=--container-mode" || echo "CONTAINER_MODE_ARG="
-        } >> "$GITHUB_ENV"
-
-        # Whether each scan's container image is needed - true only when
-        # container_mode is on AND that scan is selected. Computed once here
-        # so the cache/pull steps below don't each re-derive the same logic.
-        img_sast=false; img_container=false; img_secret=false; img_iac=false
-        if [ "$CONTAINER_MODE" = "true" ]; then
-          $run_sast && img_sast=true
-          { $run_sca || $run_sbom; } && img_container=true
-          $run_secret && img_secret=true
-          $run_iac && img_iac=true
+        [ -n "$SCANS" ] || { echo "::error::scan_type did not match any scan. Provide one or more of: sast, sca, secret, iac, ml, sbom."; exit 1; }
+        echo "scans=$SCANS" >> "$GITHUB_OUTPUT"
+        if [ "$QUALITY_GATE" = "true" ] && [ "$SCANS" = "ml" ]; then
+          echo "::notice::quality_gate is on, but only ml was selected, which the quality gate does not cover."
         fi
 
-        {
-          echo "run_sast=$run_sast"
-          echo "run_sca=$run_sca"
-          echo "run_secret=$run_secret"
-          echo "run_iac=$run_iac"
-          echo "run_ml=$run_ml"
-          echo "run_api=$run_api"
-          echo "run_sbom=$run_sbom"
-          echo "container_mode=$CONTAINER_MODE"
-          echo "img_sast=$img_sast"
-          echo "img_container=$img_container"
-          echo "img_secret=$img_secret"
-          echo "img_iac=$img_iac"
-        } >> "$GITHUB_OUTPUT"
+        # Inputs the pipeline no longer uses.
+        [ -z "${SCA_SEVERITY//[$'\t\r\n ']}" ] && [ "${SAST_SEVERITY//[$'\t\r\n ']}" = "HIGH" ] || \
+          echo "::warning::sast_severity and sca_severity are ignored: the quality-gate policy in AccuKnox decides which findings fail the build (with quality_gate: false, findings fail it unless soft_fail)."
+        [ -z "$ML_MODEL_NAME" ] && [ "$ML_SOURCE_TYPE" = "github" ] || \
+          echo "::warning::ml_model_name and ml_source_type are ignored: the model identifier is derived from the repository."
 
         echo "Downloading AccuKnox ASPM Scanner ($SCANNER_VERSION)..."
         SCANNER_BIN="$RUNNER_TEMP/accuknox-aspm-scanner"
-        curl -L "https://github.com/accuknox/aspm-scanner-cli/releases/download/${SCANNER_VERSION}/accuknox-aspm-scanner" -o "$SCANNER_BIN"
+        curl -fsSL --retry 3 --retry-delay 5 \
+          "https://github.com/accuknox/aspm-scanner-cli/releases/download/${SCANNER_VERSION}/accuknox-aspm-scanner" -o "$SCANNER_BIN"
         chmod +x "$SCANNER_BIN"
         echo "ACCUKNOX_SCANNER=$SCANNER_BIN" >> "$GITHUB_ENV"
-        echo "AccuKnox ASPM scanner installed at $SCANNER_BIN"
 
-        # Quality gate: gated scan steps call this wrapper instead of `scan`. Each upload joins
-        # the run's quality-gate run and declares only its own scan type, so a scan with nothing
-        # to upload (e.g. no secrets found) never leaves the gate waiting for it. The wrapper
-        # records which scan types uploaded; the final gate step waits for those.
-        GATE=false
-        if [ "$QUALITY_GATE" = "true" ]; then
-          { $run_sast || $run_sca || $run_secret || $run_iac || $run_sbom; } && GATE=true
-          [ "$GATE" = true ] || echo "::notice::quality_gate is on, but only ml/api-discovery were selected, which the quality gate does not cover."
-        fi
-        echo "gate=$GATE" >> "$GITHUB_OUTPUT"
-        GATE_UPLOADS="$RUNNER_TEMP/accuknox-gate-uploads"
-        rm -f "$GATE_UPLOADS"
-        GATED_SCAN="$RUNNER_TEMP/accuknox-gated-scan"
-        cat > "$GATED_SCAN" <<EOF
-        #!/usr/bin/env bash
-        # usage: accuknox-gated-scan <gate scan type> <scan arguments...>
-        set -o pipefail
-        type="\$1"; shift
-        if [ "$GATE" != "true" ]; then exec "$SCANNER_BIN" scan "\$@"; fi
-        log="\$(mktemp)"
-        "$SCANNER_BIN" scan --quality-gate --gate-scanners "\$type" "\$@" 2>&1 | tee "\$log"
-        rc=\${PIPESTATUS[0]}
-        grep -q 'Quality gate run id:' "\$log" && echo "\$type" >> "$GATE_UPLOADS"
-        rm -f "\$log"
-        exit \$rc
-        EOF
-        chmod +x "$GATED_SCAN"
-        echo "ACCUKNOX_GATED_SCAN=$GATED_SCAN" >> "$GITHUB_ENV"
-
-        # Only the tools the selected scans need, and only in local mode -
-        # container_mode=true runs everything in Docker, so there's nothing
-        # local to install/cache. The key changes with the scanner binary or tool set.
-        tools=""
-        if [ "$CONTAINER_MODE" != "true" ]; then
-          $run_sast && tools+=" sast"
-          { $run_sca || $run_sbom; } && tools+=" container"
-          $run_secret && tools+=" secret"
-          $run_iac && tools+=" iac"
-        fi
+        # Local tools the selected scans need. container_mode runs them in Docker instead, and ml
+        # pulls its own image only when model files are found, so neither installs anything here.
+        CONTAINER_MODE="${CONTAINER_MODE//[$'\t\r\n ']}"
+        echo "container_mode=$CONTAINER_MODE" >> "$GITHUB_OUTPUT"
+        tools=""; images=""
+        for scan in ${SCANS//,/ }; do
+          case "$scan" in
+            sast) t=sast ;; sca|sbom) t=container ;; secret) t=secret ;; iac) t=iac ;; *) t="" ;;
+          esac
+          [ -n "$t" ] || continue
+          case " $tools " in *" $t "*) continue ;; esac
+          tools+=" $t"
+        done
+        tools="${tools# }"
+        if [ "$CONTAINER_MODE" = "true" ]; then images="$tools"; tools=""; fi
         echo "tools=$tools" >> "$GITHUB_OUTPUT"
+        for t in sast container secret iac; do
+          case " $images " in *" $t "*) echo "img_$t=true" ;; *) echo "img_$t=false" ;; esac
+        done >> "$GITHUB_OUTPUT"
         sha=$(sha256sum "$SCANNER_BIN" | cut -c1-12)
         echo "scanner_sha=$sha" >> "$GITHUB_OUTPUT"
-        echo "tools_key=$sha${tools// /-}" >> "$GITHUB_OUTPUT"
+        echo "tools_key=$sha-${tools// /-}" >> "$GITHUB_OUTPUT"
 
     - name: Cache scanner tools
       id: tools-cache
@@ -353,15 +296,13 @@ runs:
       shell: bash
       run: |
         set -e
-        # `tool install` exits 0 even when the download silently fails, so
-        # verify the expected binary actually landed and retry instead of
-        # trusting the exit code.
+        # `tool install` exits 0 even when the download silently fails, so verify the expected
+        # binary actually landed and retry instead of trusting the exit code.
         if [ -d /usr/share/accuknox-aspm-scanner/tools ]; then
           TOOLS_DIR=/usr/share/accuknox-aspm-scanner/tools
         else
           TOOLS_DIR="$HOME/.local/bin/accuknox"
         fi
-
         install_tool() {
           verify_path="$TOOLS_DIR/$2"
           [ -e "$verify_path" ] && return 0
@@ -377,32 +318,12 @@ runs:
           echo "ERROR: failed to install scanner tool '$1' (expected $verify_path)."
           return 1
         }
-
         for t in ${{ steps.setup.outputs.tools }}; do
           verify_rel="$t"; [ "$t" = sast ] && verify_rel="sast/sast"
           install_tool "$t" "$verify_rel"
         done
 
-    # ML/API Discovery have no local tool-install path in this CLI, so they
-    # always run --container-mode. sast/sca/secret/iac/sbom only go through
-    # Docker when container_mode=true is explicitly requested. Either way,
-    # cache the image as a docker-save tarball instead of re-pulling it.
-    - name: Restore cached ML scan image
-      id: ml-image-cache
-      if: steps.setup.outputs.run_ml == 'true'
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/accuknox-images/ml-scan.tar
-        key: accuknox-image-ml-scan-1.0.21-linux-amd64
-
-    - name: Restore cached API Discovery image
-      id: api-image-cache
-      if: steps.setup.outputs.run_api == 'true'
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/accuknox-images/api-discovery.tar
-        key: accuknox-image-api-discovery-0.1.0-linux-amd64
-
+    # container_mode only: cache each scanner image as a docker-save tarball instead of re-pulling it.
     - name: Restore cached SAST image
       id: sast-image-cache
       if: steps.setup.outputs.img_sast == 'true'
@@ -436,269 +357,147 @@ runs:
         key: accuknox-image-iac-3.2.458-linux-amd64
 
     - name: Load or pull container-mode images
-      if: steps.setup.outputs.run_ml == 'true' || steps.setup.outputs.run_api == 'true' || steps.setup.outputs.img_sast == 'true' || steps.setup.outputs.img_container == 'true' || steps.setup.outputs.img_secret == 'true' || steps.setup.outputs.img_iac == 'true'
+      if: steps.setup.outputs.container_mode == 'true'
       shell: bash
       run: |
         set -e
         load_or_pull() {
           [ "$1" = true ] || return 0
           [ "$2" = true ] && { docker load -i "$4"; return; }
-          docker pull ${5:+--platform "$5"} "$3" && mkdir -p "$(dirname "$4")" && docker save -o "$4" "$3"
+          docker pull "$3" && mkdir -p "$(dirname "$4")" && docker save -o "$4" "$3"
         }
-        load_or_pull "${{ steps.setup.outputs.run_ml }}" "${{ steps.ml-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/ondemand_modelscan:1.0.21 "${{ runner.temp }}/accuknox-images/ml-scan.tar" linux/amd64
-        load_or_pull "${{ steps.setup.outputs.run_api }}" "${{ steps.api-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/code2api:0.1.0 "${{ runner.temp }}/accuknox-images/api-discovery.tar"
         load_or_pull "${{ steps.setup.outputs.img_sast }}" "${{ steps.sast-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/opengrepjob:0.1.0 "${{ runner.temp }}/accuknox-images/sast.tar"
         load_or_pull "${{ steps.setup.outputs.img_container }}" "${{ steps.container-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/accuknox/trivy:0.69.3 "${{ runner.temp }}/accuknox-images/container.tar"
         load_or_pull "${{ steps.setup.outputs.img_secret }}" "${{ steps.secret-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/trufflesecurity/trufflehog:3.90.3 "${{ runner.temp }}/accuknox-images/secret.tar"
         load_or_pull "${{ steps.setup.outputs.img_iac }}" "${{ steps.iac-image-cache.outputs.cache-hit }}" public.ecr.aws/k9v9d5v2/bridgecrew/checkov:3.2.458 "${{ runner.temp }}/accuknox-images/iac.tar"
 
     # ------------------------------------------------------------------
-    # SAST (OpenGrep)
+    # Every scan, the uploads and the quality gate: one pipeline run. The
+    # step records its exit code instead of failing, so the artifact upload
+    # and the PR decoration below still run; the last step fails the job.
     # ------------------------------------------------------------------
-    - name: Run AccuKnox SAST Scan
-      if: ${{ steps.setup.outputs.run_sast == 'true' }}
+    - name: Run AccuKnox scans
+      id: scan
       shell: bash
       env:
         ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
         ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
         ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
-        COMMAND: ${{ inputs.sast_command }}
-        SEVERITY: ${{ inputs.sast_severity }}
-      run: |
-        set -e
-        echo "Starting AccuKnox SAST (OpenGrep) scan..."
-
-        SEVERITY="${SEVERITY//[$'\t\r\n ']}"
-        SEVERITY_ARG=""
-        [ -n "$SEVERITY" ] && SEVERITY_ARG="--severity $SEVERITY"
-
-        "$ACCUKNOX_GATED_SCAN" SG --keep-results $SOFT_FAIL_ARG sast \
-          --command "$COMMAND" \
-          --repo-url "https://github.com/${GITHUB_REPOSITORY}.git" \
-          --commit-sha "${GITHUB_SHA}" \
-          --pipeline-id "${GITHUB_RUN_ID}" \
-          --job-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-          $SEVERITY_ARG $CONTAINER_MODE_ARG
-
-        # SCA also defaults to ./results.json - rename immediately so a
-        # later "scan_type: sast,sca" run doesn't have SCA silently
-        # overwrite this file before it's uploaded as an artifact or read
-        # by the PR Decorator step below.
-        [ -f results.json ] && mv results.json sast-results.json || true
-
-    # ------------------------------------------------------------------
-    # SCA (Trivy filesystem)
-    # ------------------------------------------------------------------
-    - name: Run AccuKnox SCA Scan
-      if: ${{ steps.setup.outputs.run_sca == 'true' }}
-      shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
-        COMMAND: ${{ inputs.sca_command }}
-        SEVERITY: ${{ inputs.sca_severity }}
-      run: |
-        set -e
-        echo "Starting AccuKnox SCA scan..."
-
-        SEVERITY="${SEVERITY//[$'\t\r\n ']}"
-        SEVERITY_ARG=""
-        [ -n "$SEVERITY" ] && SEVERITY_ARG="--severity $SEVERITY"
-
-        # Asset identity is passed explicitly: git-derived defaults are wrong on
-        # PR builds, where the checkout is a detached HEAD.
-        "$ACCUKNOX_GATED_SCAN" TR --keep-results $SOFT_FAIL_ARG sca \
-          --command "$COMMAND" \
-          --repo-url "https://github.com/${GITHUB_REPOSITORY}" \
-          --repo-branch "${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" \
-          $SEVERITY_ARG $CONTAINER_MODE_ARG
-
-        # See the matching rename in the SAST step - same default filename.
-        [ -f results.json ] && mv results.json sca-results.json || true
-
-    # ------------------------------------------------------------------
-    # Secret (TruffleHog)
-    # ------------------------------------------------------------------
-    - name: Run AccuKnox Secret Scan
-      if: ${{ steps.setup.outputs.run_secret == 'true' }}
-      shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
-        COMMAND: ${{ inputs.secret_command }}
-        ADDITIONAL_ARGUMENTS: ${{ inputs.secret_additional_arguments }}
-      run: |
-        set -e
-        echo "Starting AccuKnox Secret scan..."
-
-        touch ./results.jsonl
-        chmod 666 ./results.jsonl
-
-        FULL_CMD="$COMMAND"
-        [ -n "$ADDITIONAL_ARGUMENTS" ] && FULL_CMD="$FULL_CMD $ADDITIONAL_ARGUMENTS"
-
-        "$ACCUKNOX_GATED_SCAN" TruffleHog --keep-results $SOFT_FAIL_ARG secret --command "$FULL_CMD" $CONTAINER_MODE_ARG
-
-    # ------------------------------------------------------------------
-    # IaC (Checkov) - with frameworks
-    # ------------------------------------------------------------------
-    - name: Run AccuKnox IaC Scan
-      if: ${{ steps.setup.outputs.run_iac == 'true' }}
-      shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
-        RAW_COMMAND: ${{ inputs.iac_command }}
-        DIRECTORY: ${{ inputs.iac_directory }}
-        FILE: ${{ inputs.iac_file }}
-        FRAMEWORK: ${{ inputs.iac_framework }}
-        COMPACT: ${{ inputs.iac_compact }}
-        QUIET: ${{ inputs.iac_quiet }}
-      run: |
-        set -e
-        echo "Starting AccuKnox IaC scan..."
-
-        if [ -n "$RAW_COMMAND" ]; then
-          CMD_ARGS="$RAW_COMMAND"
-        else
-          CMD_ARGS=""
-          # --file and --directory are mutually exclusive in Checkov; file wins.
-          if [ -n "$FILE" ]; then
-            CMD_ARGS="$CMD_ARGS --file $FILE"
-          elif [ -n "$DIRECTORY" ]; then
-            CMD_ARGS="$CMD_ARGS --directory $DIRECTORY"
-          fi
-          [ "$COMPACT" = "true" ] && CMD_ARGS="$CMD_ARGS --compact"
-          [ "$QUIET" = "true" ] && CMD_ARGS="$CMD_ARGS --quiet"
-          # Support one or more comma-separated frameworks
-          if [ -n "$FRAMEWORK" ]; then
-            for fw in $(echo "$FRAMEWORK" | tr ',' ' '); do
-              CMD_ARGS="$CMD_ARGS --framework $fw"
-            done
-          fi
-        fi
-
-        # --keep-results: without it the file is deleted right after
-        # upload, before the PR Decorator step below can read it.
-        "$ACCUKNOX_GATED_SCAN" IAC --keep-results $SOFT_FAIL_ARG iac --command "$CMD_ARGS" --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" --repo-branch "${GITHUB_REF#refs/heads/}" $CONTAINER_MODE_ARG
-
-    # ------------------------------------------------------------------
-    # ML Static Scan (ModelScan)
-    # ------------------------------------------------------------------
-    - name: Run AccuKnox ML Static Scan
-      if: ${{ steps.setup.outputs.run_ml == 'true' }}
-      shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
-        COMMAND: ${{ inputs.ml_command }}
-        MODEL_NAME: ${{ inputs.ml_model_name }}
-        SOURCE_TYPE: ${{ inputs.ml_source_type }}
-      run: |
-        set -e
-        echo "Starting AccuKnox ML Static scan..."
-
-        EXTRA=""
-        [ -n "$MODEL_NAME" ] && EXTRA="$EXTRA --model-name $MODEL_NAME"
-        [ -n "$SOURCE_TYPE" ] && EXTRA="$EXTRA --source-type $SOURCE_TYPE"
-
-        "$ACCUKNOX_SCANNER" scan $SOFT_FAIL_ARG ml-scan \
-          --command "$COMMAND" \
-          --container-mode \
-          --repo-url "${GITHUB_REPOSITORY}" \
-          --commit-ref "${GITHUB_REF#refs/heads/}" \
-          $EXTRA
-
-    # ------------------------------------------------------------------
-    # API Discovery (code2api)
-    # ------------------------------------------------------------------
-    - name: Run AccuKnox API Discovery Scan
-      if: ${{ steps.setup.outputs.run_api == 'true' }}
-      shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
-        COMMAND: ${{ inputs.api_command }}
-      run: |
-        set -e
-        echo "Starting AccuKnox API Discovery scan..."
-
-        "$ACCUKNOX_SCANNER" scan --keep-results $SOFT_FAIL_ARG api-discovery \
-          --command "$COMMAND" \
-          --container-mode \
-          --repo-url "${GITHUB_REPOSITORY}"
-
-    # ------------------------------------------------------------------
-    # SBOM (image and filesystem)
-    # ------------------------------------------------------------------
-    - name: Run AccuKnox SBOM Scan
-      if: ${{ steps.setup.outputs.run_sbom == 'true' }}
-      shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_LABEL: ${{ inputs.accuknox_label }}
+        ACCUKNOX_GATE_TOKEN: ${{ inputs.gate_token }}
+        SCANS: ${{ steps.setup.outputs.scans }}
+        QUALITY_GATE: ${{ inputs.quality_gate }}
+        GATE_TIMEOUT: ${{ inputs.gate_timeout }}
+        SOFT_FAIL: ${{ inputs.soft_fail }}
+        CONTAINER_MODE: ${{ steps.setup.outputs.container_mode }}
+        KEEP_RESULTS: ${{ inputs.upload_artifact == 'true' || inputs.pr_decorator == 'true' }}
+        SAST_COMMAND: ${{ inputs.sast_command }}
+        SCA_COMMAND: ${{ inputs.sca_command }}
+        SECRET_COMMAND: ${{ inputs.secret_command }}
+        SECRET_ADDITIONAL_ARGUMENTS: ${{ inputs.secret_additional_arguments }}
+        IAC_RAW_COMMAND: ${{ inputs.iac_command }}
+        IAC_DIRECTORY: ${{ inputs.iac_directory }}
+        IAC_FILE: ${{ inputs.iac_file }}
+        IAC_FRAMEWORK: ${{ inputs.iac_framework }}
+        IAC_COMPACT: ${{ inputs.iac_compact }}
+        IAC_QUIET: ${{ inputs.iac_quiet }}
+        ML_COMMAND: ${{ inputs.ml_command }}
         SBOM_SCAN_TYPE: ${{ inputs.sbom_scan_type }}
-        IMAGE_REF: ${{ inputs.sbom_image_ref }}
-        SCAN_PATH: ${{ inputs.sbom_scan_path }}
-        RAW_COMMAND: ${{ inputs.sbom_command }}
-        SEVERITY: ${{ inputs.sbom_severity }}
-        PROJECT_NAME: ${{ inputs.sbom_project_name }}
+        SBOM_IMAGE_REF: ${{ inputs.sbom_image_ref }}
+        SBOM_SCAN_PATH: ${{ inputs.sbom_scan_path }}
+        SBOM_RAW_COMMAND: ${{ inputs.sbom_command }}
+        SBOM_SEVERITY: ${{ inputs.sbom_severity }}
+        SBOM_PROJECT_NAME: ${{ inputs.sbom_project_name }}
       run: |
         set -e
-        echo "Starting AccuKnox SBOM scan..."
+        trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; echo "${v%"${v##*[![:space:]]}"}"; }
+        ARGS=(pipeline --scans "$SCANS")
 
-        # Trim leading/trailing whitespace and CR/LF (preserve internal spaces
-        # so names like "My Project" survive) before passing to the scanner.
-        PROJECT_NAME="${PROJECT_NAME#"${PROJECT_NAME%%[![:space:]]*}"}"
-        PROJECT_NAME="${PROJECT_NAME%"${PROJECT_NAME##*[![:space:]]}"}"
-
-        if [ -z "$PROJECT_NAME" ]; then
-          echo "ERROR: sbom_project_name is required for sbom."
-          exit 1
-        fi
-
-        SEVERITY="${SEVERITY//[$'\t\r\n ']}"
-
-        # The scanner runs the SBOM generator (Trivy) inside a container as root,
-        # so the results.json it writes is root-owned. The scanner then enriches
-        # that file in-place (injecting project_name and rewriting the in-container
-        # scan root "/workdir"/image ref to the real project) BEFORE uploading.
-        # As the non-root runner user that in-place write fails with a permission
-        # error, which the scanner swallows and uploads the RAW file — so the
-        # backend sees metadata.component.name ("/workdir" or the image ref) as the
-        # project name and rejects it. Pre-create the file world-writable (same
-        # trick the secret scan uses) so the enrichment write succeeds.
-        touch ./results.json
-        chmod 666 ./results.json
-
-        if [ -n "$RAW_COMMAND" ]; then
-          CMD="$RAW_COMMAND"
-        else
-          SBOM_SCAN_TYPE="${SBOM_SCAN_TYPE//[$'\t\r\n ']}"
-          if [ "$SBOM_SCAN_TYPE" = "image" ]; then
-            if [ -z "$IMAGE_REF" ]; then
-              echo "ERROR: sbom_image_ref is required when sbom_scan_type is image."
-              exit 1
-            fi
-            CMD="image ${IMAGE_REF}"
-          elif [ "$SBOM_SCAN_TYPE" = "filesystem" ] || [ "$SBOM_SCAN_TYPE" = "path" ] || [ "$SBOM_SCAN_TYPE" = "fs" ]; then
-            CMD="filesystem ${SCAN_PATH}"
+        case ",$SCANS," in *,sast,*) ARGS+=(--sast-command "$SAST_COMMAND") ;; esac
+        case ",$SCANS," in *,sca,*) ARGS+=(--sca-command "$SCA_COMMAND") ;; esac
+        case ",$SCANS," in *,ml,*) ARGS+=(--ml-command "$ML_COMMAND") ;; esac
+        case ",$SCANS," in *,secret,*)
+          SECRET="$SECRET_COMMAND"
+          [ -n "$SECRET_ADDITIONAL_ARGUMENTS" ] && SECRET="$SECRET $SECRET_ADDITIONAL_ARGUMENTS"
+          ARGS+=(--secret-command "$SECRET") ;;
+        esac
+        case ",$SCANS," in *,iac,*)
+          if [ -n "$IAC_RAW_COMMAND" ]; then
+            IAC="$IAC_RAW_COMMAND"
           else
-            echo "ERROR: Invalid sbom_scan_type: $SBOM_SCAN_TYPE. Expected image or filesystem."
-            exit 1
+            IAC=""
+            # --file and --directory are mutually exclusive in Checkov; file wins.
+            if [ -n "$IAC_FILE" ]; then IAC="--file $IAC_FILE"; elif [ -n "$IAC_DIRECTORY" ]; then IAC="--directory $IAC_DIRECTORY"; fi
+            [ "$IAC_COMPACT" = "true" ] && IAC="$IAC --compact"
+            [ "$IAC_QUIET" = "true" ] && IAC="$IAC --quiet"
+            for fw in ${IAC_FRAMEWORK//,/ }; do IAC="$IAC --framework $fw"; done
           fi
-          [ -n "$SEVERITY" ] && CMD="$CMD --severity $SEVERITY"
+          ARGS+=(--iac-command "$(trim "$IAC")") ;;
+        esac
+        case ",$SCANS," in *,sbom,*)
+          PROJECT_NAME="$(trim "$SBOM_PROJECT_NAME")"
+          [ -n "$PROJECT_NAME" ] || { echo "::error::sbom_project_name is required for sbom."; exit 1; }
+          if [ -n "$SBOM_RAW_COMMAND" ]; then
+            SBOM="$SBOM_RAW_COMMAND"
+          else
+            case "$(trim "$SBOM_SCAN_TYPE")" in
+              image)
+                [ -n "$SBOM_IMAGE_REF" ] || { echo "::error::sbom_image_ref is required when sbom_scan_type is image."; exit 1; }
+                SBOM="image $SBOM_IMAGE_REF" ;;
+              filesystem|path|fs) SBOM="filesystem $SBOM_SCAN_PATH" ;;
+              *) echo "::error::Invalid sbom_scan_type: $SBOM_SCAN_TYPE. Expected image or filesystem."; exit 1 ;;
+            esac
+            SEVERITY="${SBOM_SEVERITY//[$'\t\r\n ']}"
+            [ -n "$SEVERITY" ] && SBOM="$SBOM --severity $SEVERITY"
+          fi
+          ARGS+=(--sbom-command "$SBOM" --project-name "$PROJECT_NAME") ;;
+        esac
+
+        [ "$CONTAINER_MODE" = "true" ] && ARGS+=(--container-mode)
+        [ "$(trim "$SOFT_FAIL")" = "true" ] && ARGS+=(--softfail)
+        GATE=false
+        if [ "$(echo "$QUALITY_GATE" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+          GATE=true
+          GATE_JSON="$RUNNER_TEMP/accuknox-quality-gate.json"
+          rm -f "$GATE_JSON"
+          ARGS+=(--quality-gate --gate-timeout "$(trim "$GATE_TIMEOUT")" --gate-json-file "$GATE_JSON")
         fi
 
-        "$ACCUKNOX_GATED_SCAN" SBOM $SOFT_FAIL_ARG --keep-results --project-name "$PROJECT_NAME" container --command "$CMD" --generate-sbom $CONTAINER_MODE_ARG
+        # Result files land in the pipeline's work directory under TMPDIR; keep them for the
+        # artifact and the PR decorator.
+        WORK="$RUNNER_TEMP/accuknox-work"
+        RESULTS="$RUNNER_TEMP/accuknox-results"
+        rm -rf "$WORK" "$RESULTS"; mkdir -p "$WORK" "$RESULTS"
+        [ "$KEEP_RESULTS" = "true" ] && ARGS+=(--keep-results)
 
-        [ -f results.json ] && cp results.json results-sbom.json || true
+        set +e
+        TMPDIR="$WORK" "$ACCUKNOX_SCANNER" "${ARGS[@]}"
+        EXIT=$?
+        set -e
+        echo "exit_code=$EXIT" >> "$GITHUB_OUTPUT"
+
+        if [ "$KEEP_RESULTS" = "true" ]; then
+          for dir in "$WORK"/accuknox-pipeline-*; do
+            [ -d "$dir" ] && find "$dir" -maxdepth 1 -type f -exec mv {} "$RESULTS"/ \;
+          done
+          echo "results_dir=$RESULTS" >> "$GITHUB_OUTPUT"
+        fi
+
+        if [ "$GATE" = true ]; then
+          if [ -f "$GATE_JSON" ]; then
+            python3 - "$GATE_JSON" <<'PY' || echo "gate_status=error" >> "$GITHUB_OUTPUT"
+        import json, os, sys
+        doc = json.load(open(sys.argv[1], encoding="utf-8"))
+        resp = doc.get("response") or {}
+        status = (resp.get("status") if doc.get("state") == "resolved" else None) or doc.get("state") or "error"
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+            out.write("gate_status=" + status + "\n")
+        PY
+          else
+            # No verdict was requested: nothing gated was uploaded (or a scan/upload failed first,
+            # which the exit code reports).
+            echo "gate_status=skipped" >> "$GITHUB_OUTPUT"
+          fi
+        fi
 
     # ------------------------------------------------------------------
     # Upload kept result files (optional)
@@ -708,9 +507,7 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: accuknox-scan-results
-        path: |
-          *results*.json
-          *results*.jsonl
+        path: ${{ runner.temp }}/accuknox-results/
         if-no-files-found: warn
         retention-days: 30
 
@@ -726,34 +523,32 @@ runs:
         LLM_API_KEY: ${{ inputs.llm_api_key }}
         LLM_MODEL: ${{ inputs.llm_model }}
         LLM_BASE_URL: ${{ inputs.llm_base_url }}
+        RESULTS: ${{ runner.temp }}/accuknox-results
       run: |
         set -e
         echo "Decorating pull request with scan findings..."
 
-        # Only the scan types decorate-pr supports, from whichever kept
-        # result files this run actually produced - not every scan_type
-        # runs every job, and ml/api-discovery/sbom aren't wired up yet
-        # (see aspm-scanner-cli/docs/pr-decorator.md).
+        # Only the scan types decorate-pr supports (sast/sca/iac/secret), from the result
+        # files this run produced (the pipeline names them after the scan).
         RESULT_FILES=""
         SCAN_TYPES=""
         add_result() {
-          [ -f "$1" ] || return 0
-          RESULT_FILES="${RESULT_FILES:+$RESULT_FILES,}$1"
+          [ -s "$RESULTS/$1" ] || return 0
+          RESULT_FILES="${RESULT_FILES:+$RESULT_FILES,}$RESULTS/$1"
           SCAN_TYPES="${SCAN_TYPES:+$SCAN_TYPES,}$2"
         }
-        add_result sast-results.json sast
-        add_result sca-results.json sca
-        add_result results_json.json iac
-        add_result results.jsonl secret
+        add_result sast.json sast
+        add_result sca.json sca
+        add_result iac.json iac
+        add_result secret.jsonl secret
 
         if [ -z "$RESULT_FILES" ]; then
           echo "No decorate-pr-supported scan result files found (sast/sca/iac/secret) - skipping."
           exit 0
         fi
 
-        # Quality gate stays at decorate-pr's own defaults (0 CRITICAL, 0
-        # HIGH, unlimited MEDIUM/LOW) - not customer-configurable here. If a
-        # different gate is ever needed, add --max-* flags back explicitly.
+        # decorate-pr's own thresholds (0 CRITICAL, 0 HIGH) decide the review verdict; the build
+        # verdict is the AccuKnox quality gate's.
         LLM_ARGS=""
         if [ -n "$LLM_API_KEY" ]; then
           LLM_ARGS="--llm-api-key $LLM_API_KEY"
@@ -761,11 +556,8 @@ runs:
             LLM_ARGS="$LLM_ARGS --llm-base-url $LLM_BASE_URL"
             [ -n "$LLM_MODEL" ] && LLM_ARGS="$LLM_ARGS --llm-model $LLM_MODEL"
           else
-            # No llm_base_url -> decorate-pr sends this key to OpenRouter's
-            # endpoint. Only correct for an actual OpenRouter key - a native
-            # OpenAI/Azure/self-hosted key sent there fails auth silently
-            # (a log warning, remediation just doesn't get generated), so
-            # this is loud on purpose.
+            # No llm_base_url -> decorate-pr sends this key to OpenRouter's endpoint. Only correct
+            # for an actual OpenRouter key; any other key fails auth silently, so this is loud.
             echo "::warning::llm_api_key is set without llm_base_url - assuming this is an OpenRouter key. If it's an OpenAI/Azure/self-hosted/other key, set llm_base_url (and usually llm_model) too, or remediation calls will silently fail auth."
           fi
         fi
@@ -777,48 +569,9 @@ runs:
           $LLM_ARGS
 
     # ------------------------------------------------------------------
-    # Quality gate - one wait for every gated scan above. Runs last so the
-    # artifact upload and PR decoration happen even when the gate fails.
+    # The build verdict: the pipeline's exit code (policy failure 1, a scan
+    # that could not run/upload or a gate that could not be evaluated 2).
     # ------------------------------------------------------------------
-    - name: AccuKnox Quality Gate
-      id: gate
-      if: ${{ steps.setup.outputs.gate == 'true' }}
+    - name: AccuKnox result
       shell: bash
-      env:
-        ACCUKNOX_ENDPOINT: ${{ inputs.accuknox_endpoint }}
-        ACCUKNOX_TOKEN: ${{ inputs.accuknox_token }}
-        ACCUKNOX_GATE_TOKEN: ${{ inputs.gate_token }}
-        GATE_TIMEOUT: ${{ inputs.gate_timeout }}
-      run: |
-        GATE_UPLOADS="$RUNNER_TEMP/accuknox-gate-uploads"
-        if [ ! -s "$GATE_UPLOADS" ]; then
-          echo "No gated scan uploaded results (nothing was found to report), so there is nothing for the quality gate to evaluate."
-          echo "gate_status=skipped" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        echo "Quality gate covers: $(sort -u "$GATE_UPLOADS" | paste -sd, -)"
-        GATE_JSON="$RUNNER_TEMP/accuknox-quality-gate.json"
-        rm -f "$GATE_JSON"
-
-        set +e
-        "$ACCUKNOX_SCANNER" gate --gate-timeout "${GATE_TIMEOUT//[$'\t\r\n ']}" --gate-json-file "$GATE_JSON" $SOFT_FAIL_ARG
-        EXIT=$?
-        set -e
-
-        if [ -f "$GATE_JSON" ]; then
-          python3 - "$GATE_JSON" <<'PY' || echo "Could not read the quality-gate response."
-        import json, os, sys
-        doc = json.load(open(sys.argv[1], encoding="utf-8"))
-        resp = doc.get("response") or {}
-        status = (resp.get("status") if doc.get("state") == "resolved" else None) or doc.get("state") or ""
-        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-            out.write("gate_status=" + status + "\n")
-        scope = str(resp.get("repository")) + ":" + str(resp.get("branch"))
-        for name, result in (resp.get("results") or {}).items():
-            if result.get("note") == "no_policy_matched":
-                print("::warning title=AccuKnox quality gate::No quality-gate policy applies to " + scope + ", so " + name + " passed without being checked.")
-            elif result.get("note") == "bucket_not_gated":
-                print("::warning title=AccuKnox quality gate::The policies for " + scope + " do not gate " + name + ", so it passed without being checked.")
-        PY
-        fi
-        exit "$EXIT"
+      run: exit ${{ steps.scan.outputs.exit_code || 1 }}

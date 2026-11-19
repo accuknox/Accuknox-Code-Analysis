@@ -1,6 +1,6 @@
 # 🛡️ Unified Code Analysis Security Scanning with AccuKnox GitHub Action
 
-The **AccuKnox Code Analysis GitHub Action** is a single, unified action that runs any combination of AccuKnox ASPM code-analysis scans — **SAST, SCA, Secret, IaC, ML Static Scan, API Discovery, and SBOM** — and uploads the results to the **AccuKnox Console** for centralized visibility, risk tracking, and remediation.
+The **AccuKnox Code Analysis GitHub Action** is a single, unified action that runs any combination of AccuKnox ASPM code-analysis scans — **SAST, SCA, Secret, IaC, ML Static Scan, and SBOM** — and uploads the results to the **AccuKnox Console** for centralized visibility, risk tracking, and remediation.
 
 Instead of wiring up a separate action for every scanner, configure **one step**, pick the scans you need via `scan_type`, and shift security left across your entire codebase — **before it reaches production**.
 
@@ -8,7 +8,7 @@ Instead of wiring up a separate action for every scanner, configure **one step**
 
 ## 🎯 Key Features
 
-- ✅ **7 Scanners, One Action** – SAST (OpenGrep), SCA (Trivy), Secret (TruffleHog), IaC (Checkov), ML Static Scan (ModelScan), API Discovery (code2api), and SBOM (image + filesystem).
+- ✅ **6 Scanners, One Action** – SAST (OpenGrep), SCA (Trivy), Secret (TruffleHog), IaC (Checkov), ML Static Scan (ModelScan), and SBOM (image + filesystem).
 - 🧩 **Run Any Combination** – Select one or many scans with a single comma/space separated `scan_type` input.
 - ⌨️ **Command Text Per Scan** – Every scanner exposes a `<type>_command` input mapped directly to the CLI's `--command`, so you control exactly what each tool runs.
 - 🏗️ **IaC with Frameworks** – Restrict IaC scans to one or more frameworks (e.g. `Kubernetes,Terraform`).
@@ -81,7 +81,7 @@ jobs:
         uses: accuknox/accuknox-code-analysis@v1
         with:
           # Pick any combination of scans
-          scan_type: "sast, sca, secret, iac, ml, api-discovery, sbom"
+          scan_type: "sast, sca, secret, iac, ml, sbom"
 
           # AccuKnox credentials
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -129,7 +129,6 @@ jobs:
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
           gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}   # AccuKnox user token for the quality gate
-          sast_severity: "HIGH,CRITICAL"
           soft_fail: true
 ```
 
@@ -153,7 +152,6 @@ jobs:
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
           gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}   # AccuKnox user token for the quality gate
-          sca_severity: "HIGH,CRITICAL"
           soft_fail: true
 ```
 
@@ -228,30 +226,7 @@ jobs:
           soft_fail: true
 ```
 
-### 6. API Discovery (Note: WIP)
-
-```yaml
-name: AccuKnox API Discovery
-on:
-  push:
-    branches: [main]
-jobs:
-  api-discovery:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7.0.0
-      - name: Run AccuKnox API Discovery
-        uses: accuknox/accuknox-code-analysis@v1
-        with:
-          scan_type: "api-discovery"
-          accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
-          accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
-          accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
-          gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}   # AccuKnox user token for the quality gate
-          soft_fail: true
-```
-
-### 7. SBOM
+### 6. SBOM
 
 > **Prerequisite — Create a Project.** To associate SBOM data with the correct entity, you must create a **Project** in the AccuKnox Console first.
 >
@@ -291,7 +266,7 @@ jobs:
 
 > For an **image** SBOM, set `sbom_scan_type: "image"` and `sbom_image_ref: "myapp:latest"` (build/pull the image earlier in the same job).
 
-### 8. Unified — All Scans in One Step
+### 7. Unified — All Scans in One Step
 
 ```yaml
 name: AccuKnox Code Analysis (Unified)
@@ -322,9 +297,6 @@ jobs:
           soft_fail: true
           upload_artifact: true
 
-          # SAST – override default severity (HIGH)
-          sast_severity: "HIGH,CRITICAL"
-
           # SBOM (project_name required)
           sbom_scan_type: "filesystem"
           sbom_scan_path: "."
@@ -335,24 +307,25 @@ jobs:
 
 ## 🚦 Quality Gate
 
-With `quality_gate: true` (the default), the policies you configure in AccuKnox decide the build instead of the `*_severity` inputs.
+With `quality_gate: true` (the default), the policies you configure in AccuKnox decide which findings fail the build.
 
-1. Each gated scan (`sast`, `sca`, `secret`, `iac`, `sbom`) uploads its results as part of one quality-gate run for this workflow run.
-2. After all scans, the **AccuKnox Quality Gate** step waits once for AccuKnox to evaluate them against the policies whose scope matches `owner/repo:branch` (on pull requests, the PR's source branch).
-3. The step passes, warns or fails from the verdict. The per-scan results and every breached threshold are printed in the log.
+1. The action runs the selected scans with the scanner's `pipeline` command, which uploads the gated scans (`sast`, `sca`, `secret`, `iac`, `sbom`) as one quality-gate run.
+2. It then waits once for AccuKnox to evaluate them against the policies whose scope matches `owner/repo:branch` (on pull requests, the PR's source branch).
+3. The build passes, warns or fails from the verdict. The per-scan results, every breached threshold, and any scan that no policy checked are printed in the log and as annotations.
 
 | Verdict | Step result | `gate_status` output |
 |---|---|---|
 | Passed, or passed with warnings | passes | `passed` / `warning` |
 | A policy failed | fails, unless `soft_fail: true` | `failed` |
 | AccuKnox could not evaluate a scan, the token was rejected, quality gates are not available, or no verdict within `gate_timeout` | fails, even with `soft_fail: true` | `error` / `rejected` / `unsupported` / `timeout` |
-| No gated scan had anything to upload | passes | `skipped` |
+| No gated scan had anything to upload (or only `ml` ran) | passes | `skipped` |
 
 Notes:
 
 - `soft_fail` defaults to `true`, which reports a failed policy without failing the build. Set `soft_fail: false` to block on it.
 - A scan with nothing to report (for example no secrets found) uploads nothing and is simply not part of the gate.
-- `ml` and `api-discovery` are not covered by the quality gate; they run and upload as before.
+- `ml` is not covered by the quality gate: it is uploaded on its own, and model issues fail the build unless `soft_fail: true`.
+- The result-file upload and the PR decoration run before the build is failed, so they are available when the gate blocks.
 - Without a policy matching the repository and branch, the gate passes with the warning *No quality-gate policy applies to …*.
 - Your AccuKnox environment must support quality gates; otherwise the step fails with `unsupported` after uploading. Use `quality_gate: false` until it does.
 - Call the action once per workflow run. Two calls in the same run share one quality-gate run.
@@ -365,37 +338,46 @@ Notes:
 
 ---
 
+## ⬆️ Upgrading from v1.0.x
+
+- **API Discovery has been removed**: AccuKnox cannot import its results yet. `api-discovery` in `scan_type` is skipped with a warning, and `api_command` is no longer an input.
+- **`sast_severity`, `sca_severity`, `ml_model_name` and `ml_source_type` are ignored** (a warning is printed when they are set). Severity is decided by the quality-gate policy in AccuKnox; with `quality_gate: false` and `soft_fail: false`, any finding fails the build.
+- **Result files** for `upload_artifact` are named after the scan (`sast.json`, `sca.json`, …) instead of `results*.json`.
+- **Repository and branch in AccuKnox**: findings are filed under the repository URL without the `.git` suffix, and pull-request scans under the PR's source branch instead of `HEAD`.
+
+---
+
 ## ⚙️ Configuration Options (Inputs)
 
 ### Common
 
 | Input | Description | Optional/Required | Default |
 |-------|-------------|-------------------|---------|
-| `scan_type` | Scans to run (comma/space separated): `sast`, `sca`, `secret`, `iac`, `ml`, `api-discovery`, `sbom` | Required | — |
+| `scan_type` | Scans to run, in order (comma/space separated): `sast`, `sca`, `secret`, `iac`, `ml`, `sbom` | Required | — |
 | `accuknox_token` | API token for authenticating with AccuKnox SaaS | Required | — |
 | `accuknox_endpoint` | URL of the AccuKnox Console to push results | Required | — |
 | `accuknox_label` | Label used in AccuKnox SaaS to organise and identify results | Required | — |
-| `scanner_version` | Git tag of the `accuknox-aspm-scanner` binary to download (must include `sca`, `ml`, `api-discovery`) | Optional | `v0.16.5` |
-| `quality_gate` | Let the AccuKnox quality-gate policy decide the build for `sast`, `sca`, `secret`, `iac`, `sbom`. When `true`, the `*_severity` inputs no longer fail the build | Optional | `true` |
+| `scanner_version` | Git tag of the `accuknox-aspm-scanner` binary to download (`v0.17.0-rc.4` or later) | Optional | `v0.17.0-rc.4` |
+| `quality_gate` | Let the AccuKnox quality-gate policy decide the build for `sast`, `sca`, `secret`, `iac`, `sbom` | Optional | `true` |
 | `gate_token` | AccuKnox **user** token for the quality-gate API. Required when `quality_gate` is `true` | Optional* | `""` |
 | `gate_timeout` | Seconds to wait for the quality-gate verdict | Optional | `300` |
-| `soft_fail` | Prevent CI from failing on findings (applies to all scans). With the quality gate: report a failed policy without failing the build | Optional | `true` |
-| `upload_artifact` | Upload kept result files (`results*.json`, `results*.jsonl`) as a GitHub artifact | Optional | `false` |
-| `container_mode` | Run `sast`/`sca`/`secret`/`iac`/`sbom` in Docker instead of the cached local CLI tool binaries. `ml` and `api-discovery` always run in Docker regardless of this flag (no local binary exists for them). | Optional | `false` |
+| `soft_fail` | Do not fail the build on findings or a failed policy. Scans that cannot run or upload, and a gate that cannot be evaluated, still fail | Optional | `true` |
+| `upload_artifact` | Upload the result files (`sast.json`, `sca.json`, `secret.jsonl`, `iac.json`, `ml.json`, `sbom.json`) as a GitHub artifact | Optional | `false` |
+| `container_mode` | Run `sast`/`sca`/`secret`/`iac`/`sbom` in Docker instead of the cached local CLI tool binaries. `ml` always scans in its container, and only pulls it when model files are found | Optional | `false` |
 
 ### SAST (`sast`)
 
 | Input | Description | Optional/Required | Default |
 |-------|-------------|-------------------|---------|
 | `sast_command` | Command text passed to `--command` (target to scan) | Optional | `.` |
-| `sast_severity` | Comma-separated severities (`LOW, MEDIUM, HIGH, CRITICAL`) | Optional | `HIGH` |
+| `sast_severity` | Deprecated and ignored: the quality-gate policy decides which findings fail the build | Optional | `HIGH` |
 
 ### SCA (`sca`)
 
 | Input | Description | Optional/Required | Default |
 |-------|-------------|-------------------|---------|
 | `sca_command` | Command text passed to `--command` (e.g. `fs .`) | Optional | `fs .` |
-| `sca_severity` | Comma-separated severities to fail on | Optional | `""` |
+| `sca_severity` | Deprecated and ignored: the quality-gate policy decides which findings fail the build | Optional | `""` |
 
 ### Secret (`secret`)
 
@@ -420,14 +402,8 @@ Notes:
 | Input | Description | Optional/Required | Default |
 |-------|-------------|-------------------|---------|
 | `ml_command` | Command text passed to `--command` (e.g. `scan -p . -r json`) | Optional | `scan -p . -r json` |
-| `ml_model_name` | Custom collector/model identifier | Optional | `""` |
-| `ml_source_type` | Source type for metadata | Optional | `github` |
-
-### API Discovery (`api-discovery`)
-
-| Input | Description | Optional/Required | Default |
-|-------|-------------|-------------------|---------|
-| `api_command` | Command text passed to `--command` (e.g. `-path . -output results.json`) | Optional | `-path . -output results.json` |
+| `ml_model_name` | Deprecated and ignored: the model identifier is derived from the repository | Optional | `""` |
+| `ml_source_type` | Deprecated and ignored | Optional | `github` |
 
 ### SBOM (`sbom`)
 
@@ -448,18 +424,17 @@ Notes:
 
 1. **Developer pushes code** – A push or pull request triggers the GitHub Action.
 2. **Scanner setup (once)** – The action validates credentials, parses `scan_type`, and downloads the `accuknox-aspm-scanner` binary for the requested `scanner_version`.
-3. **Selected scans run** – Each enabled scan builds its arguments from your `<type>_command` and scan-specific inputs:
+3. **Selected scans run** – One run of the scanner's `pipeline` command, with each scan's arguments built from your `<type>_command` and scan-specific inputs:
    - **SAST** → OpenGrep static analysis
    - **SCA** → Trivy dependency/composition analysis
    - **Secret** → TruffleHog secret detection
    - **IaC** → Checkov misconfiguration checks (optionally per framework)
    - **ML** → ModelScan static ML model analysis
-   - **API Discovery** → code2api route/endpoint discovery
    - **SBOM** → CycloneDX bill of materials for an image or filesystem
 4. **Results uploaded to AccuKnox Console** – Using the provided `accuknox_token` and `accuknox_label`.
 5. **Optional artifact upload** – If `upload_artifact: true`, kept result files are saved as a GitHub artifact.
 6. **Review findings** – Available in AccuKnox Console: **Dashboard → Issues → Findings**, filtered by scan type.
-7. **Pipeline decision** – With `quality_gate: true` (default), the **AccuKnox Quality Gate** step waits for the AccuKnox policy verdict and passes, warns or fails the build. With `quality_gate: false` and `soft_fail: false`, the pipeline fails when findings above the `*_severity` thresholds are detected.
+7. **Pipeline decision** – With `quality_gate: true` (default), the AccuKnox policy verdict passes, warns or fails the build. With `quality_gate: false` and `soft_fail: false`, any finding fails the build.
 
 ---
 
@@ -472,7 +447,7 @@ Notes:
 
 ## 🏁 Conclusion
 
-The **AccuKnox Code Analysis GitHub Action** consolidates seven security scanners into a single, configurable step — letting you run SAST, SCA, Secret, IaC, ML, API Discovery, and SBOM scans together, surface findings in the AccuKnox Console, and enforce policy gates across your CI/CD pipeline.
+The **AccuKnox Code Analysis GitHub Action** consolidates six security scanners into a single, configurable step — letting you run SAST, SCA, Secret, IaC, ML, and SBOM scans together, surface findings in the AccuKnox Console, and enforce policy gates across your CI/CD pipeline.
 
 **🔐 Shift Left with AccuKnox – Secure Your Code from Commit to Cloud! ☁️🛡️**
 
