@@ -376,7 +376,7 @@ runs:
     # ------------------------------------------------------------------
     # Every scan, the uploads and the quality gate: one pipeline run. The
     # step records its exit code instead of failing, so the artifact upload
-    # and the PR decoration below still run; the last step fails the job.
+    # below still runs; the last step fails the job.
     # ------------------------------------------------------------------
     - name: Run AccuKnox scans
       id: scan
@@ -465,7 +465,7 @@ runs:
         fi
 
         # Result files land in the pipeline's work directory under TMPDIR; keep them for the
-        # artifact and the PR decorator.
+        # artifact.
         WORK="$RUNNER_TEMP/accuknox-work"
         RESULTS="$RUNNER_TEMP/accuknox-results"
         rm -rf "$WORK" "$RESULTS"; mkdir -p "$WORK" "$RESULTS"
