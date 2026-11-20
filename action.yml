@@ -26,9 +26,9 @@ inputs:
     description: "Label in AccuKnox SaaS for associating scan results"
     required: true
   scanner_version:
-    description: "Version (git tag) of the accuknox-aspm-scanner binary to download (v0.17.0-rc.5 or later: the action runs its pipeline command)"
+    description: "Version (git tag) of the accuknox-aspm-scanner binary to download (v0.17.0 or later: the action runs its pipeline command)"
     required: false
-    default: "v0.17.0-rc.5"
+    default: "v0.17.0"
   soft_fail:
     description: "Do not fail the build on findings or a failed quality-gate policy. Scans that cannot run or upload, and a gate that cannot be evaluated, still fail."
     required: false
@@ -38,9 +38,9 @@ inputs:
     required: false
     default: "false"
   quality_gate:
-    description: "Let the AccuKnox quality-gate policy pass, warn or fail the build for sast, sca, secret, iac and sbom (ml is not gated). Requires gate_token."
+    description: "Let the AccuKnox quality-gate policy pass, warn or fail the build for sast, sca, secret, iac and sbom (ml is not gated). Requires gate_token and an AccuKnox environment with quality gates."
     required: false
-    default: "true"
+    default: "false"
   gate_token:
     description: "AccuKnox user token for the quality-gate API (required when quality_gate is true; the label token in accuknox_token is not accepted there)"
     required: false
