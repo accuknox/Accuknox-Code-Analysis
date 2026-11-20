@@ -26,9 +26,9 @@ inputs:
     description: "Label in AccuKnox SaaS for associating scan results"
     required: true
   scanner_version:
-    description: "Version (git tag) of the accuknox-aspm-scanner binary to download (v0.17.0-rc.4 or later: the action runs its pipeline command)"
+    description: "Version (git tag) of the accuknox-aspm-scanner binary to download (v0.17.0-rc.5 or later: the action runs its pipeline command)"
     required: false
-    default: "v0.17.0-rc.4"
+    default: "v0.17.0-rc.5"
   soft_fail:
     description: "Do not fail the build on findings or a failed quality-gate policy. Scans that cannot run or upload, and a gate that cannot be evaluated, still fail."
     required: false
@@ -163,26 +163,28 @@ inputs:
     default: ""
 
   # ------------------------------------------------------------------
-  # PR Decorator (optional) - posts findings as a GitHub PR review
+  # PR Decorator: a preview feature of the scanner, not available in this
+  # version of the action. The inputs are kept so workflows that set them
+  # keep working; they are ignored with a warning.
   # ------------------------------------------------------------------
   pr_decorator:
-    description: "Post findings as a GitHub PR review (summary comment + inline comments) after the scan(s) above. Requires the calling workflow to grant 'permissions: pull-requests: write'. No-op on anything that isn't a pull_request build."
+    description: "Preview, not available in this version: ignored with a warning. (Will post findings as a GitHub PR review.)"
     required: false
     default: "false"
   pr_decorator_mode:
-    description: "pr_decorator: 'advisory' (comment only) or 'blocking' (REQUEST_CHANGES when a CRITICAL/HIGH finding is present)"
+    description: "Preview, not available in this version: ignored."
     required: false
     default: "advisory"
   llm_api_key:
-    description: "pr_decorator: optional. If set, calls an LLM to generate a remediation suggestion for SAST findings with no native fix. Unset (default) = that step is skipped entirely - no LLM call, no cost, findings post as-is. Set together with llm_base_url and llm_model - see those two before setting this."
+    description: "Preview (pr_decorator), not available in this version: ignored."
     required: false
     default: ""
   llm_model:
-    description: "pr_decorator: required if llm_api_key is set to anything other than an OpenRouter key. The model name in whatever form llm_base_url's provider expects (e.g. 'gpt-4o-mini' for OpenAI directly, 'claude-sonnet-4-5' for an Anthropic-compatible gateway, 'openai/gpt-4o-mini' for OpenRouter, a local model name for self-hosted). No default - OpenRouter's own default (openai/gpt-4o-mini) only applies when llm_base_url is also left unset."
+    description: "Preview (pr_decorator), not available in this version: ignored."
     required: false
     default: ""
   llm_base_url:
-    description: "pr_decorator: required if llm_api_key is not an OpenRouter key. Any OpenAI-compatible chat-completions endpoint - OpenAI, Azure OpenAI, a self-hosted vLLM/Ollama/LM Studio server, Groq, Together, etc. Leaving this unset sends llm_api_key to OpenRouter's endpoint - only correct for an OpenRouter key. A native (non-OpenRouter) key sent there fails auth silently, so set this explicitly for any other provider."
+    description: "Preview (pr_decorator), not available in this version: ignored."
     required: false
     default: ""
 
@@ -389,7 +391,7 @@ runs:
         GATE_TIMEOUT: ${{ inputs.gate_timeout }}
         SOFT_FAIL: ${{ inputs.soft_fail }}
         CONTAINER_MODE: ${{ steps.setup.outputs.container_mode }}
-        KEEP_RESULTS: ${{ inputs.upload_artifact == 'true' || inputs.pr_decorator == 'true' }}
+        KEEP_RESULTS: ${{ inputs.upload_artifact == 'true' }}
         SAST_COMMAND: ${{ inputs.sast_command }}
         SCA_COMMAND: ${{ inputs.sca_command }}
         SECRET_COMMAND: ${{ inputs.secret_command }}
@@ -511,62 +513,10 @@ runs:
         if-no-files-found: warn
         retention-days: 30
 
-    # ------------------------------------------------------------------
-    # PR Decorator (optional) - posts findings as a GitHub PR review
-    # ------------------------------------------------------------------
-    - name: Decorate Pull Request
+    - name: PR decorator (preview)
       if: ${{ inputs.pr_decorator == 'true' }}
       shell: bash
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-        MODE: ${{ inputs.pr_decorator_mode }}
-        LLM_API_KEY: ${{ inputs.llm_api_key }}
-        LLM_MODEL: ${{ inputs.llm_model }}
-        LLM_BASE_URL: ${{ inputs.llm_base_url }}
-        RESULTS: ${{ runner.temp }}/accuknox-results
-      run: |
-        set -e
-        echo "Decorating pull request with scan findings..."
-
-        # Only the scan types decorate-pr supports (sast/sca/iac/secret), from the result
-        # files this run produced (the pipeline names them after the scan).
-        RESULT_FILES=""
-        SCAN_TYPES=""
-        add_result() {
-          [ -s "$RESULTS/$1" ] || return 0
-          RESULT_FILES="${RESULT_FILES:+$RESULT_FILES,}$RESULTS/$1"
-          SCAN_TYPES="${SCAN_TYPES:+$SCAN_TYPES,}$2"
-        }
-        add_result sast.json sast
-        add_result sca.json sca
-        add_result iac.json iac
-        add_result secret.jsonl secret
-
-        if [ -z "$RESULT_FILES" ]; then
-          echo "No decorate-pr-supported scan result files found (sast/sca/iac/secret) - skipping."
-          exit 0
-        fi
-
-        # decorate-pr's own thresholds (0 CRITICAL, 0 HIGH) decide the review verdict; the build
-        # verdict is the AccuKnox quality gate's.
-        LLM_ARGS=""
-        if [ -n "$LLM_API_KEY" ]; then
-          LLM_ARGS="--llm-api-key $LLM_API_KEY"
-          if [ -n "$LLM_BASE_URL" ]; then
-            LLM_ARGS="$LLM_ARGS --llm-base-url $LLM_BASE_URL"
-            [ -n "$LLM_MODEL" ] && LLM_ARGS="$LLM_ARGS --llm-model $LLM_MODEL"
-          else
-            # No llm_base_url -> decorate-pr sends this key to OpenRouter's endpoint. Only correct
-            # for an actual OpenRouter key; any other key fails auth silently, so this is loud.
-            echo "::warning::llm_api_key is set without llm_base_url - assuming this is an OpenRouter key. If it's an OpenAI/Azure/self-hosted/other key, set llm_base_url (and usually llm_model) too, or remediation calls will silently fail auth."
-          fi
-        fi
-
-        "$ACCUKNOX_SCANNER" decorate-pr \
-          --result-file "$RESULT_FILES" \
-          --scan-type "$SCAN_TYPES" \
-          --mode "$MODE" \
-          $LLM_ARGS
+      run: echo "::warning title=AccuKnox PR decorator::pr_decorator is a preview feature and is not available in this version of the action, so no PR review is posted. The input is ignored."
 
     # ------------------------------------------------------------------
     # The build verdict: the pipeline's exit code (policy failure 1, a scan

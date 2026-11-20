@@ -325,7 +325,7 @@ Notes:
 - `soft_fail` defaults to `true`, which reports a failed policy without failing the build. Set `soft_fail: false` to block on it.
 - A scan with nothing to report (for example no secrets found) uploads nothing and is simply not part of the gate.
 - `ml` is not covered by the quality gate: it is uploaded on its own, and model issues fail the build unless `soft_fail: true`.
-- The result-file upload and the PR decoration run before the build is failed, so they are available when the gate blocks.
+- The result-file upload runs before the build is failed, so the results are available when the gate blocks.
 - Without a policy matching the repository and branch, the gate passes with the warning *No quality-gate policy applies to …*.
 - Your AccuKnox environment must support quality gates; otherwise the step fails with `unsupported` after uploading. Use `quality_gate: false` until it does.
 - Call the action once per workflow run. Two calls in the same run share one quality-gate run.
@@ -343,6 +343,7 @@ Notes:
 - **API Discovery has been removed**: AccuKnox cannot import its results yet. `api-discovery` in `scan_type` is skipped with a warning, and `api_command` is no longer an input.
 - **`sast_severity`, `sca_severity`, `ml_model_name` and `ml_source_type` are ignored** (a warning is printed when they are set). Severity is decided by the quality-gate policy in AccuKnox; with `quality_gate: false` and `soft_fail: false`, any finding fails the build.
 - **Result files** for `upload_artifact` are named after the scan (`sast.json`, `sca.json`, …) instead of `results*.json`.
+- **`pr_decorator` is not available**: the PR decorator is a preview feature of the scanner. `pr_decorator`, `pr_decorator_mode` and the `llm_*` inputs are ignored, with a warning when `pr_decorator: true`.
 - **Repository and branch in AccuKnox**: findings are filed under the repository URL without the `.git` suffix, and pull-request scans under the PR's source branch instead of `HEAD`.
 
 ---
@@ -357,7 +358,7 @@ Notes:
 | `accuknox_token` | API token for authenticating with AccuKnox SaaS | Required | — |
 | `accuknox_endpoint` | URL of the AccuKnox Console to push results | Required | — |
 | `accuknox_label` | Label used in AccuKnox SaaS to organise and identify results | Required | — |
-| `scanner_version` | Git tag of the `accuknox-aspm-scanner` binary to download (`v0.17.0-rc.4` or later) | Optional | `v0.17.0-rc.4` |
+| `scanner_version` | Git tag of the `accuknox-aspm-scanner` binary to download (`v0.17.0-rc.5` or later) | Optional | `v0.17.0-rc.5` |
 | `quality_gate` | Let the AccuKnox quality-gate policy decide the build for `sast`, `sca`, `secret`, `iac`, `sbom` | Optional | `true` |
 | `gate_token` | AccuKnox **user** token for the quality-gate API. Required when `quality_gate` is `true` | Optional* | `""` |
 | `gate_timeout` | Seconds to wait for the quality-gate verdict | Optional | `300` |
