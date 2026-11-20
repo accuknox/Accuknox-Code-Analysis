@@ -55,7 +55,7 @@ inputs:
     default: "false"
 
   # ------------------------------------------------------------------
-  # SAST (OpenGrep)
+  # SAST
   # ------------------------------------------------------------------
   sast_command:
     description: "sast: command text passed to --command (the directory/target to scan)"
@@ -67,7 +67,7 @@ inputs:
     default: "HIGH"
 
   # ------------------------------------------------------------------
-  # SCA (Trivy filesystem)
+  # SCA (filesystem)
   # ------------------------------------------------------------------
   sca_command:
     description: "sca: command text passed to --command (e.g. 'fs .')"
@@ -79,7 +79,7 @@ inputs:
     default: ""
 
   # ------------------------------------------------------------------
-  # Secret (TruffleHog)
+  # Secret
   # ------------------------------------------------------------------
   secret_command:
     description: "secret: command text passed to --command (e.g. 'git file://.' or 'filesystem .')"
@@ -91,7 +91,7 @@ inputs:
     default: ""
 
   # ------------------------------------------------------------------
-  # IaC (Checkov) - with framework support
+  # IaC - with framework support
   # ------------------------------------------------------------------
   iac_command:
     description: "iac: raw command text passed to --command. When set, overrides iac_directory/iac_file/iac_framework/iac_compact/iac_quiet."
@@ -119,7 +119,7 @@ inputs:
     default: "true"
 
   # ------------------------------------------------------------------
-  # ML Static Scan (ModelScan)
+  # ML Static Scan
   # ------------------------------------------------------------------
   ml_command:
     description: "ml: command text passed to --command (e.g. 'scan -p . -r json')"
@@ -427,7 +427,7 @@ runs:
             IAC="$IAC_RAW_COMMAND"
           else
             IAC=""
-            # --file and --directory are mutually exclusive in Checkov; file wins.
+            # --file and --directory are mutually exclusive in the IaC scanner; file wins.
             if [ -n "$IAC_FILE" ]; then IAC="--file $IAC_FILE"; elif [ -n "$IAC_DIRECTORY" ]; then IAC="--directory $IAC_DIRECTORY"; fi
             [ "$IAC_COMPACT" = "true" ] && IAC="$IAC --compact"
             [ "$IAC_QUIET" = "true" ] && IAC="$IAC --quiet"

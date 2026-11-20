@@ -8,7 +8,7 @@ Instead of wiring up a separate action for every scanner, configure **one step**
 
 ## 🎯 Key Features
 
-- ✅ **6 Scanners, One Action** – SAST (OpenGrep), SCA (Trivy), Secret (TruffleHog), IaC (Checkov), ML Static Scan (ModelScan), and SBOM (image + filesystem).
+- ✅ **6 Scanners, One Action** – SAST, SCA, Secret, IaC, ML Static Scan, and SBOM (image + filesystem).
 - 🧩 **Run Any Combination** – Select one or many scans with a single comma/space separated `scan_type` input.
 - ⌨️ **Command Text Per Scan** – Every scanner exposes a `<type>_command` input mapped directly to the CLI's `--command`, so you control exactly what each tool runs.
 - 🏗️ **IaC with Frameworks** – Restrict IaC scans to one or more frameworks (e.g. `Kubernetes,Terraform`).
@@ -435,11 +435,11 @@ Notes:
 1. **Developer pushes code** – A push or pull request triggers the GitHub Action.
 2. **Scanner setup (once)** – The action validates credentials, parses `scan_type`, and downloads the `accuknox-aspm-scanner` binary for the requested `scanner_version`.
 3. **Selected scans run** – One run of the scanner's `pipeline` command, with each scan's arguments built from your `<type>_command` and scan-specific inputs:
-   - **SAST** → OpenGrep static analysis
-   - **SCA** → Trivy dependency/composition analysis
-   - **Secret** → TruffleHog secret detection
-   - **IaC** → Checkov misconfiguration checks (optionally per framework)
-   - **ML** → ModelScan static ML model analysis
+   - **SAST** → static code analysis
+   - **SCA** → dependency/composition analysis
+   - **Secret** → secret detection
+   - **IaC** → misconfiguration checks (optionally per framework)
+   - **ML** → static ML model analysis
    - **SBOM** → CycloneDX bill of materials for an image or filesystem
 4. **Results uploaded to AccuKnox Console** – Using the provided `accuknox_token` and `accuknox_label`.
 5. **Optional artifact upload** – If `upload_artifact: true`, kept result files are saved as a GitHub artifact.
