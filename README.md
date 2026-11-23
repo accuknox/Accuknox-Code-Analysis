@@ -51,7 +51,7 @@ Go to your repository: **Settings → Secrets and variables → Actions → New 
 | `ACCUKNOX_TOKEN`    | Your AccuKnox API token for authentication |
 | `ACCUKNOX_ENDPOINT` | The AccuKnox API URL (e.g., `cspm.demo.accuknox.com`) |
 | `ACCUKNOX_LABEL`    | Label used to tag and group scan results |
-| `ACCUKNOX_GATE_TOKEN` | AccuKnox **user** token for the quality gate (not needed with `quality_gate: false`) |
+<!-- | `ACCUKNOX_GATE_TOKEN` | AccuKnox **user** token for the quality gate (not needed with `quality_gate: false`) | -->
 
 ---
 
@@ -87,8 +87,8 @@ jobs:
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
-          quality_gate: true                               # let the AccuKnox policy decide the build
-          gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}   # AccuKnox user token for the quality gate
+          # quality_gate: true                               let the AccuKnox policy decide the build
+          # gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}   AccuKnox user token for the quality gate
 
           # Common options
           soft_fail: true            # Continue the pipeline on findings
