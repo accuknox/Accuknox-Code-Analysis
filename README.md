@@ -78,7 +78,7 @@ jobs:
         uses: actions/checkout@v7.0.0
 
       - name: Run AccuKnox Code Analysis
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           # Pick any combination of scans
           scan_type: "sast, sca, secret, iac, ml, sbom"
@@ -87,8 +87,8 @@ jobs:
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
-          # quality_gate: true                               let the AccuKnox policy decide the build
-          # gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}   AccuKnox user token for the quality gate
+          # quality_gate: true                               
+          # gate_token: ${{ secrets.ACCUKNOX_GATE_TOKEN }}  
 
           # Common options
           soft_fail: true            # Continue the pipeline on findings
