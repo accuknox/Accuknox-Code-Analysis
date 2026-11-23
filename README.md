@@ -123,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
       - name: Run AccuKnox SAST
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           scan_type: "sast"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -147,7 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
       - name: Run AccuKnox SCA
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           scan_type: "sca"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -173,7 +173,7 @@ jobs:
         with:
           fetch-depth: 0   # full history for git-based secret scanning
       - name: Run AccuKnox Secret Scan
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           scan_type: "secret"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -197,7 +197,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
       - name: Run AccuKnox IaC Scan
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           scan_type: "iac"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -221,7 +221,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
       - name: Run AccuKnox ML Static Scan
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           scan_type: "ml"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -257,7 +257,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
       - name: Run AccuKnox SBOM (filesystem)
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           scan_type: "sbom"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
@@ -289,7 +289,7 @@ jobs:
       - uses: actions/checkout@v7.0.0
 
       - name: Run AccuKnox Code Analysis
-        uses: accuknox/accuknox-code-analysis@v1
+        uses: accuknox/accuknox-code-analysis@Latest
         with:
           # Run every scanner in a single step
           scan_type: "sast, sca, secret, iac, ml, sbom"
